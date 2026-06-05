@@ -1,0 +1,146 @@
+--- /dev/null
++++ Dockerfile.propshaft
+@@ -0,0 +1,34 @@
++# syntax=docker/dockerfile:1.7
++ARG RUBY_VERSION=3.3.6
++ARG NODE_VERSION=22
++
++FROM ruby:${RUBY_VERSION}-slim AS base
++ENV RAILS_ENV=production \
++    NODE_ENV=production \
++    BUNDLE_DEPLOYMENT=1 \
++    BUNDLE_PATH=/usr/local/bundle \
++    BUNDLE_WITHOUT=development:test
++WORKDIR /rails
++RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git libsqlite3-0 pkg-config python3 && rm -rf /var/lib/apt/lists/*
++
++FROM base AS build
++RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*
++COPY Gemfile Gemfile.lock ./
++RUN bundle install
++COPY package.json package-lock.json ./
++RUN npm ci
++COPY . .
++RUN npm run build
++RUN SECRET_KEY_BASE_DUMMY=1 bundle exec rails assets:precompile
++RUN bundle exec rails runner 'require "digest"; require "fileutils"; json = Rails.application.importmap.to_json(resolver: ActionController::Base.helpers); digest = Digest::SHA256.hexdigest(json)[0, 16]; dir = Rails.root.join("public/assets"); FileUtils.mkdir_p(dir); fingerprinted = dir.join("importmap-#{digest}.json"); File.write(fingerprinted, json); FileUtils.cp(fingerprinted, dir.join("importmap.json"))'
++
++FROM ruby:${RUBY_VERSION}-slim AS app
++ENV RAILS_ENV=production \
++    BUNDLE_DEPLOYMENT=1 \
++    BUNDLE_PATH=/usr/local/bundle \
++    BUNDLE_WITHOUT=development:test
++WORKDIR /rails
++RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-0 && rm -rf /var/lib/apt/lists/*
++COPY --from=build /usr/local/bundle /usr/local/bundle
++COPY --from=build /rails /rails
++CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
+--- /dev/null
++++ .github/workflows/propshaft-importmap-build.yml
+@@ -0,0 +1,85 @@
++name: Propshaft Importmap Build
++on:
++  workflow_dispatch:
++  push:
++    branches:
++      - main
++    paths:
++      - app/assets/**
++      - app/javascript/**
++      - config/importmap.rb
++      - package.json
++      - package-lock.json
++      - vendor/javascript/**
++      - Dockerfile.propshaft
++      - .github/workflows/propshaft-importmap-build.yml
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    env:
++      RAILS_ENV: production
++      NODE_ENV: production
++      SECRET_KEY_BASE_DUMMY: 1
++
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: ruby/setup-ruby@v1
++        with:
++          bundler-cache: true
++
++      - uses: actions/setup-node@v4
++        with:
++          node-version: 22
++          cache: npm
++
++      - name: Reject live JSPM pins
++        run: |
++          if grep -Eq 'https://(ga\.)?jspm\.io|https://cdn\.jspm\.io' config/importmap.rb; then
++            echo 'Replace live JSPM pins with vendored vendor/javascript pins before CI'
++            exit 1
++          fi
++
++      - name: Install Node dependencies
++        run: npm ci
++
++      - name: Build TypeScript into app/assets/builds
++        run: npm run build
++
++      - name: Create offline importmap lock
++        run: |
++          mkdir -p tmp
++          ruby <<'RUBY'
++          require "base64"
++          require "json"
++          require "openssl"
++
++          lock = Dir["vendor/javascript/**/*.js"].sort.map do |path|
++            contents = File.binread(path)
++            header = contents.lines.first.to_s.strip
++
++            {
++              "file" => path,
++              "source_url" => header[/downloaded from (https:\/\/\S+)/, 1],
++              "sha384" => "sha384-#{Base64.strict_encode64(OpenSSL::Digest::SHA384.digest(contents))}",
++              "bytes" => contents.bytesize
++            }
++          end
++
++          File.write("tmp/importmap.lock.json", JSON.pretty_generate(lock))
++          RUBY
++
++      - name: Precompile Propshaft assets
++        run: bundle exec rails assets:precompile
++
++      - name: Export release-bound importmap JSON
++        run: |
++          bundle exec rails runner 'require "digest"; require "fileutils"; json = Rails.application.importmap.to_json(resolver: ActionController::Base.helpers); digest = Digest::SHA256.hexdigest(json)[0, 16]; dir = Rails.root.join("public/assets"); FileUtils.mkdir_p(dir); fingerprinted = dir.join("importmap-#{digest}.json"); File.write(fingerprinted, json); FileUtils.cp(fingerprinted, dir.join("importmap.json"))'
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: propshaft-importmap-release
++          path: |
++            public/assets
++            tmp/importmap.lock.json
+--- /dev/null
++++ nginx.importmap-propshaft.conf
+@@ -0,0 +1,18 @@
++location = /assets/importmap.json {
++  try_files $uri =404;
++  expires -1;
++  add_header Cache-Control "no-store, max-age=0, must-revalidate" always;
++  add_header Surrogate-Control "no-store" always;
++}
++
++location ~ ^/assets/importmap-[0-9a-f]{16}\.json$ {
++  try_files $uri =404;
++  expires 1y;
++  add_header Cache-Control "public, max-age=31536000, immutable" always;
++}
++
++location ~ ^/assets/.+-[0-9a-f]{7,}\.(js|css|png|jpg|jpeg|gif|svg|webp|woff2?)$ {
++  try_files $uri =404;
++  expires 1y;
++  add_header Cache-Control "public, max-age=31536000, immutable" always;
++}

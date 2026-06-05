@@ -1,0 +1,85 @@
+name: Propshaft Importmap Build
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - app/assets/**
+      - app/javascript/**
+      - config/importmap.rb
+      - package.json
+      - package-lock.json
+      - vendor/javascript/**
+      - Dockerfile.propshaft
+      - .github/workflows/propshaft-importmap-build.yml
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      RAILS_ENV: production
+      NODE_ENV: production
+      SECRET_KEY_BASE_DUMMY: 1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Reject live JSPM pins
+        run: |
+          if grep -Eq 'https://(ga\.)?jspm\.io|https://cdn\.jspm\.io' config/importmap.rb; then
+            echo 'Replace live JSPM pins with vendored vendor/javascript pins before CI'
+            exit 1
+          fi
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build TypeScript into app/assets/builds
+        run: npm run build
+
+      - name: Create offline importmap lock
+        run: |
+          mkdir -p tmp
+          ruby <<'RUBY'
+          require "base64"
+          require "json"
+          require "openssl"
+
+          lock = Dir["vendor/javascript/**/*.js"].sort.map do |path|
+            contents = File.binread(path)
+            header = contents.lines.first.to_s.strip
+
+            {
+              "file" => path,
+              "source_url" => header[/downloaded from (https:\/\/\S+)/, 1],
+              "sha384" => "sha384-#{Base64.strict_encode64(OpenSSL::Digest::SHA384.digest(contents))}",
+              "bytes" => contents.bytesize
+            }
+          end
+
+          File.write("tmp/importmap.lock.json", JSON.pretty_generate(lock))
+          RUBY
+
+      - name: Precompile Propshaft assets
+        run: bundle exec rails assets:precompile
+
+      - name: Export release-bound importmap JSON
+        run: |
+          bundle exec rails runner 'require "digest"; require "fileutils"; json = Rails.application.importmap.to_json(resolver: ActionController::Base.helpers); digest = Digest::SHA256.hexdigest(json)[0, 16]; dir = Rails.root.join("public/assets"); FileUtils.mkdir_p(dir); fingerprinted = dir.join("importmap-#{digest}.json"); File.write(fingerprinted, json); FileUtils.cp(fingerprinted, dir.join("importmap.json"))'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: propshaft-importmap-release
+          path: |
+            public/assets
+            tmp/importmap.lock.json

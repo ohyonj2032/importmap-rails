@@ -1,0 +1,34 @@
+# syntax=docker/dockerfile:1.7
+ARG RUBY_VERSION=3.3.6
+ARG NODE_VERSION=22
+
+FROM ruby:${RUBY_VERSION}-slim AS base
+ENV RAILS_ENV=production \
+    NODE_ENV=production \
+    BUNDLE_DEPLOYMENT=1 \
+    BUNDLE_PATH=/usr/local/bundle \
+    BUNDLE_WITHOUT=development:test
+WORKDIR /rails
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential curl git libsqlite3-0 pkg-config python3 && rm -rf /var/lib/apt/lists/*
+
+FROM base AS build
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - && apt-get update && apt-get install -y --no-install-recommends nodejs && rm -rf /var/lib/apt/lists/*
+COPY Gemfile Gemfile.lock ./
+RUN bundle install
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+RUN SECRET_KEY_BASE_DUMMY=1 bundle exec rails assets:precompile
+RUN bundle exec rails runner 'require "digest"; require "fileutils"; json = Rails.application.importmap.to_json(resolver: ActionController::Base.helpers); digest = Digest::SHA256.hexdigest(json)[0, 16]; dir = Rails.root.join("public/assets"); FileUtils.mkdir_p(dir); fingerprinted = dir.join("importmap-#{digest}.json"); File.write(fingerprinted, json); FileUtils.cp(fingerprinted, dir.join("importmap.json"))'
+
+FROM ruby:${RUBY_VERSION}-slim AS app
+ENV RAILS_ENV=production \
+    BUNDLE_DEPLOYMENT=1 \
+    BUNDLE_PATH=/usr/local/bundle \
+    BUNDLE_WITHOUT=development:test
+WORKDIR /rails
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-0 && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bundle /usr/local/bundle
+COPY --from=build /rails /rails
+CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
