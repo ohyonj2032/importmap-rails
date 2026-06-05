@@ -1,0 +1,132 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  RAILS_ENV: production
+  DOCKER_REGISTRY: ghcr.io
+
+jobs:
+  vendor-cdn-and-lock:
+    name: Vendor CDN dependencies with SRI
+    runs-on: ubuntu-latest
+    outputs:
+      cache_hit: ${{ steps.cdn-cache.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Cache CDN pin lockfile
+        id: cdn-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            config/cdn_pins.lock.json
+            vendor/javascript/
+          key: cdn-pins-${{ hashFiles('config/importmap.rb') }}
+          restore-keys: |
+            cdn-pins-
+
+      - name: Vendor CDN pins and compute SRI
+        if: steps.cdn-cache.outputs.cache-hit != 'true'
+        run: |
+          bundle exec rake importmap:vendor_cdn
+
+      - name: Validate SRI hashes against resolved URLs
+        run: |
+          ruby .github/scripts/validate_cdn_sri.rb
+
+      - name: Upload vendored CDN assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: vendored-cdn-assets
+          path: |
+            config/cdn_pins.lock.json
+            vendor/javascript/
+          retention-days: 5
+
+  build-and-push:
+    name: Build Docker image
+    needs: vendor-cdn-and-lock
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download vendored CDN assets
+        uses: actions/download-artifact@v4
+        with:
+          name: vendored-cdn-assets
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+
+  sri-integrity-check:
+    name: SRI integrity smoke test
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull built image
+        run: |
+          docker pull ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:sha-${{ github.sha }}
+
+      - name: Verify importmap.json contains integrity
+        run: |
+          docker run --rm --entrypoint cat \
+            ${{ env.DOCKER_REGISTRY }}/${{ github.repository }}:sha-${{ github.sha }} \
+            /app/public/importmap.json | \
+            python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          integrity = data.get('integrity', {})
+          imports = data.get('imports', {})
+          local_pins = {k: v for k, v in imports.items() if not v.startswith('http')}
+          missing_sri = [k for k in local_pins if k not in integrity]
+          if missing_sri:
+              print(f'FAIL: Missing SRI for local pins: {missing_sri}')
+              sys.exit(1)
+          print(f'OK: All {len(local_pins)} local pins have SRI hashes')
+          print(f'OK: {len(integrity)} total integrity entries')
+          "
