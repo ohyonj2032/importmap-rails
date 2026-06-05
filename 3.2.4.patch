@@ -1,0 +1,449 @@
+diff --git a/test/dummy/app/channels/application_cable/connection.rb b/test/dummy/app/channels/application_cable/connection.rb
+index 0ff5442..679ebe9 100644
+--- a/test/dummy/app/channels/application_cable/connection.rb
++++ b/test/dummy/app/channels/application_cable/connection.rb
+@@ -1,4 +1,22 @@
+ module ApplicationCable
+   class Connection < ActionCable::Connection::Base
++    identified_by :current_user
++
++    def connect
++      self.current_user = find_verified_user
++    end
++
++    private
++
++    def find_verified_user
++      # For CSP-compatible authentication, use cookies or headers
++      # This is a placeholder - implement your own auth logic
++      verified_user = nil
++      if verified_user
++        verified_user
++      else
++        reject_unauthorized_connection
++      end
++    end
+   end
+-end
++end
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..8dc8d6d 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,76 @@
++// Configure importmap with external dependencies
++import "@rails/ujs"
++import "@rails/request.js"
++
++// Turbo for SPA-like navigation and form submissions
++import "@hotwired/turbo"
++import "@hotwired/turbo-rails"
++
++// Stimulus controller framework with lazy-loading support
++import "@hotwired/stimulus"
++import "@hotwired/stimulus-loading"
++
++// Action Cable for WebSocket connections
++import { createConsumer } from "@rails/actioncable"
++
++// Register the Stimulus application and load all controllers
++import { Application } from "@hotwired/stimulus"
++
++const application = Application.start()
++application.debug = !productionEnvironment()
++application.warnings = !productionEnvironment()
++application.handleError = (error, message, detail) => {
++  if (!productionEnvironment()) {
++    console.error("Stimulus Error:", message, detail)
++    console.error(error)
++  }
++}
++
++// Load controllers following the standard Stimulus index convention
++import controllers from "controllers/index"
++import specialControllers from "controllers/special_index"
++
++// Register controllers from the index.js barrel file
++controllers.forEach((controller) => {
++  application.register(controller.identifier, controller.controller)
++})
++
++specialControllers.forEach((controller) => {
++  application.register(controller.identifier, controller.controller)
++})
++
++// Load lazy controllers (loaded on demand)
++import { eagerLoadControllersFrom } from "@hotwired/stimulus-loading"
++eagerLoadControllersFrom("controllers", application)
++
++// Import custom utilities
++import "helpers/requests/index"
++import "helpers/requests/special_index"
++
++// Setup Action Cable consumer with CSP-compatible configuration
++const consumer = createConsumer(getConsumerUrl())
++
++function getConsumerUrl() {
++  const cableUrlMeta = document.querySelector("meta[name='action-cable-url']")
++  if (cableUrlMeta) return cableUrlMeta.content
++
++  const metaCableUrl = document.querySelector("meta[name='cable-url']")
++  if (metaCableUrl) return metaCableUrl.content
++
++  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
++  return `${protocol}//${window.location.host}/cable`
++}
++
++function productionEnvironment() {
++  const envMeta = document.querySelector("meta[name='environment']")
++  return envMeta ? envMeta.content === "production" : false
++}
++
++// Global error boundary for module import failures
++window.addEventListener("error", (event) => {
++  if (event.target && event.target.tagName === "SCRIPT") {
++    if (!productionEnvironment()) {
++      console.warn("Module import error:", event.target.src || event.target)
++    }
++  }
++})
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/controllers/goodbye_controller.js b/test/dummy/app/javascript/controllers/goodbye_controller.js
+index 9a95547..529acfb 100644
+--- a/test/dummy/app/javascript/controllers/goodbye_controller.js
++++ b/test/dummy/app/javascript/controllers/goodbye_controller.js
+@@ -1,7 +1,7 @@
+-import { Controller } from "stimulus"
++import { Controller } from "@hotwired/stimulus"
+ 
+ export default class extends Controller {
+   connect() {
+     this.element.textContent = "Goodbye World"
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/controllers/index.js b/test/dummy/app/javascript/controllers/index.js
+index 6c33acd..ad58fa6 100644
+--- a/test/dummy/app/javascript/controllers/index.js
++++ b/test/dummy/app/javascript/controllers/index.js
+@@ -1 +1,11 @@
+-import "controllers/goodbye_controller"
++// Stimulus controllers barrel file
++// This file auto-registers controllers from the controllers directory
++// Each controller is exported as a named module with its identifier
++
++import goodbye_controller from "controllers/goodbye_controller"
++
++const controllers = [
++  { identifier: "goodbye", controller: goodbye_controller }
++]
++
++export default controllers
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/controllers/special_index.js b/test/dummy/app/javascript/controllers/special_index.js
+index 5b418da..cdbc976 100644
+--- a/test/dummy/app/javascript/controllers/special_index.js
++++ b/test/dummy/app/javascript/controllers/special_index.js
+@@ -1 +1,6 @@
+-console.log("Sorry - no imports here!")
++// Special controllers barrel file
++// This file exports additional controllers not in the standard index
++
++const specialControllers = []
++
++export default specialControllers
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/helpers/requests/index.js b/test/dummy/app/javascript/helpers/requests/index.js
+index e69de29..30afc8e 100644
+--- a/test/dummy/app/javascript/helpers/requests/index.js
++++ b/test/dummy/app/javascript/helpers/requests/index.js
+@@ -0,0 +1 @@
++console.log("Requests helper loaded")
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/helpers/requests/special_index.js b/test/dummy/app/javascript/helpers/requests/special_index.js
+index 0758b5a..0201590 100644
+--- a/test/dummy/app/javascript/helpers/requests/special_index.js
++++ b/test/dummy/app/javascript/helpers/requests/special_index.js
+@@ -1 +1 @@
+-console.log("Sorry, nothing helpful here")
++console.log("Sorry, nothing helpful here")
+\ No newline at end of file
+diff --git a/test/dummy/app/javascript/rich_text.js b/test/dummy/app/javascript/rich_text.js
+index e69de29..7faa958 100644
+--- a/test/dummy/app/javascript/rich_text.js
++++ b/test/dummy/app/javascript/rich_text.js
+@@ -0,0 +1,3 @@
++// Comment: This file is intentionally empty
++// It serves as a placeholder for the rich_text module
++// The module is pinned in importmap.rb for testing purposes
+\ No newline at end of file
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..cfc4f04 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -3,13 +3,26 @@
+   <head>
+     <title>Dummy</title>
+     <meta name="viewport" content="width=device-width,initial-scale=1">
++    <meta name="environment" content="<%= Rails.env %>">
++    <meta name="action-cable-url" content="<%= Rails.application.config.action_cable.url %>">
+     <%= csrf_meta_tags %>
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++
++    <%# Preload critical modules for faster initial page load %>
++    <% if Rails.env.production? %>
++      <link rel="dns-prefetch" href="https://ga.jspm.io">
++      <link rel="preconnect" href="https://ga.jspm.io">
++      <link rel="dns-prefetch" href="https://cdn.skypack.dev">
++      <link rel="preconnect" href="https://cdn.skypack.dev">
++    <% end %>
++
++    <%# Importmap tags generate the importmap JSON, module preload links, and entry point script %>
++    <%= javascript_importmap_tags %>
+   </head>
+ 
+   <body>
+     <%= yield %>
+   </body>
+-</html>
++</html>
+\ No newline at end of file
+diff --git a/test/dummy/config/cable.yml b/test/dummy/config/cable.yml
+index 98367f8..c3c32ff 100644
+--- a/test/dummy/config/cable.yml
++++ b/test/dummy/config/cable.yml
+@@ -7,4 +7,4 @@ test:
+ production:
+   adapter: redis
+   url: <%= ENV.fetch("REDIS_URL") { "redis://localhost:6379/1" } %>
+-  channel_prefix: dummy_production
++  channel_prefix: dummy_production
+\ No newline at end of file
+diff --git a/test/dummy/config/environments/development.rb b/test/dummy/config/environments/development.rb
+index d533da7..23bcf00 100644
+--- a/test/dummy/config/environments/development.rb
++++ b/test/dummy/config/environments/development.rb
+@@ -68,4 +68,25 @@ Rails.application.configure do
+ 
+   # Uncomment if you wish to allow Action Cable access from any origin.
+   # config.action_cable.disable_request_forgery_protection = true
+-end
++
++  # Importmap-specific development cache strategy
++  # In development, importmap resolves modules individually for better debugging
++  # Each module is served as a separate file with source maps for clarity
++  config.importmap.sweep_cache = true
++  config.importmap.cache_sweepers = [
++    Rails.root.join("app/javascript"),
++    Rails.root.join("vendor/javascript")
++  ]
++
++  # Disable SRI checking in development for faster module loading
++  # Integrity hashes are still generated but not strictly enforced
++  config.assets.integrity_hash_algorithm = nil
++
++  # Allow cross-origin requests for development (needed for live reload, etc.)
++  config.action_cable.disable_request_forgery_protection = true
++  config.action_cable.allowed_request_origins = [
++    %r{http://localhost:\d+},
++    %r{http://127.0.0.1:\d+},
++    %r{http://0.0.0.0:\d+}
++  ]
++end
+\ No newline at end of file
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..1464d65 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -115,4 +115,34 @@ Rails.application.configure do
+   # config.active_record.database_selector = { delay: 2.seconds }
+   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+   # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+-end
++
++  # Importmap-specific production optimizations
++  # In production, importmap is generated once and cached aggressively
++  config.importmap.sweep_cache = false
++  config.importmap.cache_sweepers = []
++
++  # Enable SRI integrity hashing in production for security
++  # For Propshaft 1.2+, set the algorithm to sha384
++  config.assets.integrity_hash_algorithm = :sha384
++
++  # Production asset host configuration for CDN support
++  # config.asset_host = ENV.fetch("ASSET_HOST", "https://assets.example.com")
++
++  # Cross-browser compatibility headers
++  config.public_file_server.headers = {
++    'Cache-Control'               => "public, max-age=#{1.year.to_i}, immutable",
++    'X-Content-Type-Options'      => 'nosniff',
++    'X-Frame-Options'             => 'SAMEORIGIN',
++    'X-XSS-Protection'            => '1; mode=block',
++    'Referrer-Policy'             => 'strict-origin-when-cross-origin',
++    'Permissions-Policy'          => 'camera=(), microphone=(), geolocation=()'
++  }
++
++  # Action Cable production configuration
++  config.action_cable.url = ENV.fetch("ACTION_CABLE_URL", "wss://#{ENV.fetch('APPLICATION_HOST', 'localhost')}/cable")
++  config.action_cable.allowed_request_origins = [
++    %r{https://#{Regexp.escape(ENV.fetch('APPLICATION_HOST', 'example.com'))}}
++  ]
++  config.action_cable.mount_path = '/cable'
++  config.action_cable.disable_request_forgery_protection = false
++end
+\ No newline at end of file
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..4df96e5 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,55 @@
++# Pin npm packages by running ./bin/importmap
++
++# Enable Subresource Integrity (SRI) for all local assets
++# This automatically calculates integrity hashes for local files
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++# Entry point for the application
++pin "application", preload: true
++
++# Core Rails JavaScript libraries
++pin "@rails/actioncable", to: "https://ga.jspm.io/npm:@rails/actioncable@7.1.3/app/assets/javascripts/actioncable.esm.js", integrity: "sha384-...", preload: true
++pin "@rails/activestorage", to: "https://ga.jspm.io/npm:@rails/activestorage@7.1.3/app/assets/javascripts/activestorage.esm.js", integrity: "sha384-...", preload: true
++pin "@rails/ujs", to: "https://ga.jspm.io/npm:@rails/ujs@7.1.3/lib/assets/javascripts/rails-ujs.esm.js", integrity: "sha384-...", preload: true
++pin "@rails/request.js", to: "https://ga.jspm.io/npm:@rails/request.js@0.0.9/src/index.js", integrity: "sha384-...", preload: false
++
++# Turbo
++pin "@hotwired/turbo", to: "https://ga.jspm.io/npm:@hotwired/turbo@8.0.4/dist/turbo.esm.js", integrity: "sha384-...", preload: true
++pin "@hotwired/turbo-rails", to: "https://ga.jspm.io/npm:@hotwired/turbo-rails@8.0.4/app/javascript/turbo/index.js", integrity: "sha384-...", preload: true
++
++# Stimulus
++pin "@hotwired/stimulus", to: "https://ga.jspm.io/npm:@hotwired/stimulus@3.2.2/dist/stimulus.js", integrity: "sha384-...", preload: true
++pin "@hotwired/stimulus-loading", to: "https://ga.jspm.io/npm:@hotwired/stimulus-loading@1.0.1/stimulus-loading.js", integrity: "sha384-...", preload: true
++
++# Map all local controller directories for Stimulus
++pin_all_from "app/javascript/controllers", under: "controllers", preload: ["application"]
++pin_all_from "app/javascript/controllers/utilities", under: "controllers/utilities", preload: ["application"]
++
++# Support for component-based controllers (lookbook/component library pattern)
++pin_all_from "app/components", under: "controllers", to: "app/components", preload: ["application"]
++
++# Map custom utility directories
++pin_all_from "app/javascript/helpers", under: "helpers", preload: false
++pin_all_from "app/javascript/services", under: "services", preload: false
++pin_all_from "app/javascript/utils", under: "utils", preload: false
++pin_all_from "app/javascript/channels", under: "channels", preload: ["application"]
++
++# Map vendor directory for manually vendored packages
++pin_all_from "vendor/javascript", under: nil, preload: false
++
++# Common utility libraries (example CDN pins with SRI)
++pin "lodash-es", to: "https://ga.jspm.io/npm:lodash-es@4.17.21/lodash.js", integrity: "sha384-...", preload: false
++pin "axios", to: "https://ga.jspm.io/npm:axios@1.6.8/dist/esm/axios.js", integrity: "sha384-...", preload: false
++pin "date-fns", to: "https://ga.jspm.io/npm:date-fns@2.30.0/dist/esm/index.js", integrity: "sha384-...", preload: false
++
++# Example: domain-specific packages with conditional preloading
++# These will only be preloaded when on specific entry points
++pin "admin/application", preload: "admin", integrity: true
++pin "checkout/application", preload: ["checkout", "payment"], integrity: true
++
++# Example: disable integrity for certain external CDNs that don't provide it
++pin "some-third-party", to: "https://example.com/script.js", integrity: false, preload: false
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++# Local custom JavaScript files
++pin "rich_text", preload: true
++pin "analytics", preload: "application", integrity: true
+diff --git a/test/dummy/config/initializers/content_security_policy.rb b/test/dummy/config/initializers/content_security_policy.rb
+index 41c4301..1232b20 100644
+--- a/test/dummy/config/initializers/content_security_policy.rb
++++ b/test/dummy/config/initializers/content_security_policy.rb
+@@ -4,25 +4,66 @@
+ # For further information see the following documentation
+ # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy
+ 
+-# Rails.application.config.content_security_policy do |policy|
+-#   policy.default_src :self, :https
+-#   policy.font_src    :self, :https, :data
+-#   policy.img_src     :self, :https, :data
+-#   policy.object_src  :none
+-#   policy.script_src  :self, :https
+-#   policy.style_src   :self, :https
++Rails.application.config.content_security_policy do |policy|
++  policy.default_src :self, :https
++  policy.font_src    :self, :https, :data
++  policy.img_src     :self, :https, :data, :blob
++  policy.object_src  :none
+ 
+-#   # Specify URI for violation reports
+-#   # policy.report_uri "/csp-violation-report-endpoint"
+-# end
++  # Allow JavaScript from self, CDN sources, and importmap sources
++  policy.script_src  :self, :https, :unsafe_inline,
++    "https://cdn.skypack.dev",
++    "https://ga.jspm.io",
++    "https://cdn.jsdelivr.net",
++    "https://unpkg.com"
+ 
+-# If you are using UJS then enable automatic nonce generation
+-# Rails.application.config.content_security_policy_nonce_generator = -> request { SecureRandom.base64(16) }
++  policy.style_src   :self, :https, :unsafe_inline
+ 
+-# Set the nonce only to specific directives
+-# Rails.application.config.content_security_policy_nonce_directives = %w(script-src)
++  # Allow WebSocket connections for Action Cable
++  if Rails.env.development? || Rails.env.test?
++    policy.connect_src :self, :https, "ws://localhost:3000", "wss://localhost:3000",
++      "ws://127.0.0.1:3000", "wss://127.0.0.1:3000",
++      "http://localhost:*", "https://localhost:*"
++  else
++    policy.connect_src :self, :https, :wss
++  end
++
++  # Allow fonts from CDNs
++  policy.font_src :self, :https, :data, "https://fonts.gstatic.com",
++    "https://cdn.jsdelivr.net"
++
++  # Allow media from self and CDN
++  policy.media_src :self, :https, :data
++
++  # Allow frames from self only (prevents clickjacking)
++  policy.frame_src :self
++
++  # Allow form actions to self only
++  policy.form_action :self
++
++  # Allow worker scripts for Web Workers
++  policy.worker_src :self, :blob
++
++  # Specify URI for violation reports
++  # policy.report_uri "/csp-violation-report-endpoint"
++end
++
++# Enable automatic nonce generation for inline scripts
++# This provides a secure way to allow inline scripts (like importmap)
++Rails.application.config.content_security_policy_nonce_generator = -> request {
++  SecureRandom.base64(16)
++}
++
++# Set the nonce to script-src and style-src directives
++# This allows importmap inline scripts to pass CSP validation
++Rails.application.config.content_security_policy_nonce_directives = %w(script-src style-src)
+ 
+ # Report CSP violations to a specified URI
+ # For further information see the following documentation:
+ # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only
+-# Rails.application.config.content_security_policy_report_only = true
++# In development, use report-only mode to test CSP without blocking
++if Rails.env.development? || Rails.env.test?
++  Rails.application.config.content_security_policy_report_only = true
++else
++  Rails.application.config.content_security_policy_report_only = false
++end
+\ No newline at end of file

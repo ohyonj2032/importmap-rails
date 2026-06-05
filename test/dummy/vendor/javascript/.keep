@@ -1,0 +1,3 @@
+// Vendor JavaScript directory
+// This directory contains manually vendored third-party packages
+// Packages here are pinned via vendor/javascript path in importmap.rb

@@ -3,10 +3,23 @@
   <head>
     <title>Dummy</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="environment" content="<%= Rails.env %>">
+    <meta name="action-cable-url" content="<%= Rails.application.config.action_cable.url %>">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+
+    <%# Preload critical modules for faster initial page load %>
+    <% if Rails.env.production? %>
+      <link rel="dns-prefetch" href="https://ga.jspm.io">
+      <link rel="preconnect" href="https://ga.jspm.io">
+      <link rel="dns-prefetch" href="https://cdn.skypack.dev">
+      <link rel="preconnect" href="https://cdn.skypack.dev">
+    <% end %>
+
+    <%# Importmap tags generate the importmap JSON, module preload links, and entry point script %>
+    <%= javascript_importmap_tags %>
   </head>
 
   <body>

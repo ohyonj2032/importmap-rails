@@ -115,4 +115,34 @@ Rails.application.configure do
   # config.active_record.database_selector = { delay: 2.seconds }
   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
   # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+
+  # Importmap-specific production optimizations
+  # In production, importmap is generated once and cached aggressively
+  config.importmap.sweep_cache = false
+  config.importmap.cache_sweepers = []
+
+  # Enable SRI integrity hashing in production for security
+  # For Propshaft 1.2+, set the algorithm to sha384
+  config.assets.integrity_hash_algorithm = :sha384
+
+  # Production asset host configuration for CDN support
+  # config.asset_host = ENV.fetch("ASSET_HOST", "https://assets.example.com")
+
+  # Cross-browser compatibility headers
+  config.public_file_server.headers = {
+    'Cache-Control'               => "public, max-age=#{1.year.to_i}, immutable",
+    'X-Content-Type-Options'      => 'nosniff',
+    'X-Frame-Options'             => 'SAMEORIGIN',
+    'X-XSS-Protection'            => '1; mode=block',
+    'Referrer-Policy'             => 'strict-origin-when-cross-origin',
+    'Permissions-Policy'          => 'camera=(), microphone=(), geolocation=()'
+  }
+
+  # Action Cable production configuration
+  config.action_cable.url = ENV.fetch("ACTION_CABLE_URL", "wss://#{ENV.fetch('APPLICATION_HOST', 'localhost')}/cable")
+  config.action_cable.allowed_request_origins = [
+    %r{https://#{Regexp.escape(ENV.fetch('APPLICATION_HOST', 'example.com'))}}
+  ]
+  config.action_cable.mount_path = '/cable'
+  config.action_cable.disable_request_forgery_protection = false
 end

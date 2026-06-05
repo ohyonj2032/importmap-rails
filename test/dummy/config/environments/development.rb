@@ -68,4 +68,25 @@ Rails.application.configure do
 
   # Uncomment if you wish to allow Action Cable access from any origin.
   # config.action_cable.disable_request_forgery_protection = true
+
+  # Importmap-specific development cache strategy
+  # In development, importmap resolves modules individually for better debugging
+  # Each module is served as a separate file with source maps for clarity
+  config.importmap.sweep_cache = true
+  config.importmap.cache_sweepers = [
+    Rails.root.join("app/javascript"),
+    Rails.root.join("vendor/javascript")
+  ]
+
+  # Disable SRI checking in development for faster module loading
+  # Integrity hashes are still generated but not strictly enforced
+  config.assets.integrity_hash_algorithm = nil
+
+  # Allow cross-origin requests for development (needed for live reload, etc.)
+  config.action_cable.disable_request_forgery_protection = true
+  config.action_cable.allowed_request_origins = [
+    %r{http://localhost:\d+},
+    %r{http://127.0.0.1:\d+},
+    %r{http://0.0.0.0:\d+}
+  ]
 end
