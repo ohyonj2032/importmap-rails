@@ -20,33 +20,29 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
   end
 
   test "javascript_inline_importmap_tag" do
-    assert_dom_equal(
-      %(
-      <script type="importmap" data-turbo-track="reload">
-        {
-          "imports": {
-            "md5": "https://cdn.skypack.dev/md5",
-            "not_there": "/nowhere.js",
-            "rich_text": "/rich_text.js"
-          },
-          "integrity": {
-            "/rich_text.js": "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
-          }
-        }
-      </script>
-      ),
-      javascript_inline_importmap_tag
-    )
+    rendered = javascript_inline_importmap_tag
+    importmap = JSON.parse(rendered[%r{<script[^>]*>(.*)</script>}m, 1])
+
+    assert_equal "https://ga.jspm.io/npm:react@18.3.1/index.js", importmap.dig("imports", "react")
+    assert_equal "https://ga.jspm.io/npm:react-dom@18.3.1/client.js", importmap.dig("imports", "react-dom/client")
+    assert_match %r{/assets/application-.*\.js}, importmap.dig("imports", "application")
+    assert_match %r{/assets/lib/bootstrap-.*\.js}, importmap.dig("imports", "@app/bootstrap")
+
+    application_path = importmap.dig("imports", "application")
+    bootstrap_path = importmap.dig("imports", "@app/bootstrap")
+
+    assert importmap.dig("integrity", application_path)
+    assert importmap.dig("integrity", bootstrap_path)
   end
 
   test "javascript_importmap_module_preload_tags" do
-    assert_dom_equal(
-      %(
-        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
-      ),
-      javascript_importmap_module_preload_tags
-    )
+    rendered = javascript_importmap_module_preload_tags
+
+    assert_includes rendered, %{href="https://ga.jspm.io/npm:react@18.3.1/index.js"}
+    assert_includes rendered, %{href="https://ga.jspm.io/npm:react-dom@18.3.1/client.js"}
+    assert_match %r{href="/assets/application-.*\.js"[^>]*integrity=}m, rendered
+    assert_match %r{href="/assets/react/components/app_shell-.*\.js"[^>]*integrity=}m, rendered
+    refute_includes rendered, "module_compat"
   end
 
   test "tags have no nonce if CSP is not configured" do

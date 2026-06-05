@@ -6,10 +6,16 @@
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
 
-    <%= stylesheet_link_tag 'application', media: 'all' %>
+    <%= stylesheet_link_tag "application", media: "all" %>
+    <% importmap_json = Rails.application.importmap.to_json(resolver: self) %>
+    <%= tag.script src: "https://ga.jspm.io/npm:es-module-shims@2.8.1/dist/es-module-shims.js", async: true, crossorigin: "anonymous", nonce: request&.content_security_policy_nonce %>
+    <%= tag.script importmap_json.html_safe, type: "importmap-shim", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce %>
+    <%= javascript_importmap_module_preload_tags %>
+    <%= tag.script %(import "application").html_safe, type: "module-shim", nonce: request&.content_security_policy_nonce %>
   </head>
 
   <body>
+    <div id="react-importmap-root" data-environment="<%= Rails.env %>" data-entrypoint="packs/application"></div>
     <%= yield %>
   </body>
 </html>

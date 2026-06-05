@@ -1,0 +1,331 @@
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..4727ee1 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,14 @@
++import { startApplication, stopApplication } from "@app/bootstrap"
++
++const mount = () => startApplication()
++const unmount = () => stopApplication()
++
++document.addEventListener("turbo:before-render", unmount)
++document.addEventListener("turbo:before-cache", unmount)
++document.addEventListener("turbo:load", mount)
++
++if (document.readyState === "loading") {
++  document.addEventListener("DOMContentLoaded", mount, { once: true })
++} else {
++  mount()
++}
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..50848e5 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -6,10 +6,16 @@
+     <%= csrf_meta_tags %>
+     <%= csp_meta_tag %>
+ 
+-    <%= stylesheet_link_tag 'application', media: 'all' %>
++    <%= stylesheet_link_tag "application", media: "all" %>
++    <% importmap_json = Rails.application.importmap.to_json(resolver: self) %>
++    <%= tag.script src: "https://ga.jspm.io/npm:es-module-shims@2.8.1/dist/es-module-shims.js", async: true, crossorigin: "anonymous", nonce: request&.content_security_policy_nonce %>
++    <%= tag.script importmap_json.html_safe, type: "importmap-shim", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce %>
++    <%= javascript_importmap_module_preload_tags %>
++    <%= tag.script %(import "application").html_safe, type: "module-shim", nonce: request&.content_security_policy_nonce %>
+   </head>
+ 
+   <body>
++    <div id="react-importmap-root" data-environment="<%= Rails.env %>" data-entrypoint="packs/application"></div>
+     <%= yield %>
+   </body>
+ </html>
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..8e2e03d 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -1,118 +1,31 @@
+ require "active_support/core_ext/integer/time"
+ 
+ Rails.application.configure do
+-  # Settings specified here will take precedence over those in config/application.rb.
+-
+-  # Code is not reloaded between requests.
+   config.cache_classes = true
+-
+-  # Eager load code on boot. This eager loads most of Rails and
+-  # your application in memory, allowing both threaded web servers
+-  # and those relying on copy on write to perform better.
+-  # Rake tasks automatically ignore this option for performance.
+   config.eager_load = true
+-
+-  # Full error reports are disabled and caching is turned on.
+-  config.consider_all_requests_local       = false
++  config.consider_all_requests_local = false
+   config.action_controller.perform_caching = true
+-
+-  # Ensures that a master key has been made available in either ENV["RAILS_MASTER_KEY"]
+-  # or in config/master.key. This key is used to decrypt credentials (and other encrypted files).
+-  # config.require_master_key = true
+-
+-  # Disable serving static files from the `/public` folder by default since
+-  # Apache or NGINX already handles this.
+-  config.public_file_server.enabled = ENV['RAILS_SERVE_STATIC_FILES'].present?
+-
+-  # Compress CSS using a preprocessor.
+-  # config.assets.css_compressor = :sass
+-
+-  # Do not fallback to assets pipeline if a precompiled asset is missed.
++  config.public_file_server.enabled = ENV["RAILS_SERVE_STATIC_FILES"].present?
++  config.public_file_server.headers = {
++    "Cache-Control" => "public, max-age=#{1.year.to_i}, immutable"
++  }
+   config.assets.compile = false
+-
+-  # Enable serving of images, stylesheets, and JavaScripts from an asset server.
+-  # config.asset_host = 'http://assets.example.com'
+-
+-  # Specifies the header that your server uses for sending files.
+-  # config.action_dispatch.x_sendfile_header = 'X-Sendfile' # for Apache
+-  # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
+-
+-  # Store uploaded files on the local file system (see config/storage.yml for options).
++  config.assets.digest = true if config.assets.respond_to?(:digest=)
+   config.active_storage.service = :local
+-
+-  # Mount Action Cable outside main process or domain.
+-  # config.action_cable.mount_path = nil
+-  # config.action_cable.url = 'wss://example.com/cable'
+-  # config.action_cable.allowed_request_origins = [ 'http://example.com', /http:\/\/example.*/ ]
+-
+-  # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
+-  # config.force_ssl = true
+-
+-  # Include generic and useful information about system operation, but avoid logging too much
+-  # information to avoid inadvertent exposure of personally identifiable information (PII).
+   config.log_level = :info
+-
+-  # Prepend all log lines with the following tags.
+-  config.log_tags = [ :request_id ]
+-
+-  # Use a different cache store in production.
+-  # config.cache_store = :mem_cache_store
+-
+-  # Use a real queuing backend for Active Job (and separate queues per environment).
+-  # config.active_job.queue_adapter     = :resque
+-  # config.active_job.queue_name_prefix = "dummy_production"
+-
+-  # Ignore bad email addresses and do not raise email delivery errors.
+-  # Set this to true and configure the email server for immediate delivery to raise delivery errors.
+-  # config.action_mailer.raise_delivery_errors = false
+-
+-  # Enable locale fallbacks for I18n (makes lookups for any locale fall back to
+-  # the I18n.default_locale when a translation cannot be found).
++  config.log_tags = [:request_id]
++  config.cache_store = :memory_store, { size: 64.megabytes }
+   config.i18n.fallbacks = true
+-
+-  # Send deprecation notices to registered listeners.
+   config.active_support.deprecation = :notify
+-
+-  # Log disallowed deprecations.
+   config.active_support.disallowed_deprecation = :log
+-
+-  # Tell Active Support which deprecation messages to disallow.
+   config.active_support.disallowed_deprecation_warnings = []
+-
+-  # Use default logging formatter so that PID and timestamp are not suppressed.
+   config.log_formatter = ::Logger::Formatter.new
+ 
+-  # Use a different logger for distributed setups.
+-  # require "syslog/logger"
+-  # config.logger = ActiveSupport::TaggedLogging.new(Syslog::Logger.new 'app-name')
+-
+   if ENV["RAILS_LOG_TO_STDOUT"].present?
+-    logger           = ActiveSupport::Logger.new(STDOUT)
++    logger = ActiveSupport::Logger.new(STDOUT)
+     logger.formatter = config.log_formatter
+-    config.logger    = ActiveSupport::TaggedLogging.new(logger)
++    config.logger = ActiveSupport::TaggedLogging.new(logger)
+   end
+ 
+-  # Do not dump schema after migrations.
+   config.active_record.dump_schema_after_migration = false
+-
+-  # Inserts middleware to perform automatic connection switching.
+-  # The `database_selector` hash is used to pass options to the DatabaseSelector
+-  # middleware. The `delay` is used to determine how long to wait after a write
+-  # to send a subsequent read to the primary.
+-  #
+-  # The `database_resolver` class is used by the middleware to determine which
+-  # database is appropriate to use based on the time delay.
+-  #
+-  # The `database_resolver_context` class is used by the middleware to set
+-  # timestamps for the last write to the primary. The resolver uses the context
+-  # class timestamps to determine how long to wait before reading from the
+-  # replica.
+-  #
+-  # By default Rails will store a last write timestamp in the session. The
+-  # DatabaseSelector middleware is designed as such you can define your own
+-  # strategy for connection switching and pass that into the middleware through
+-  # these configuration options.
+-  # config.active_record.database_selector = { delay: 2.seconds }
+-  # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+-  # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+ end
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..7b18100 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,35 @@
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++pin "application", preload: true
++pin "react", to: "https://ga.jspm.io/npm:react@18.3.1/index.js", preload: true
++pin "react-dom", to: "https://ga.jspm.io/npm:react-dom@18.3.1/index.js", preload: true
++pin "react-dom/client", to: "https://ga.jspm.io/npm:react-dom@18.3.1/client.js", preload: true
++pin "scheduler", to: "https://ga.jspm.io/npm:scheduler@0.23.2/index.js"
++pin "rich_text", preload: false
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++resolve_alias = {
++  "@app" => {
++    source: "app/javascript/lib",
++    under: "@app",
++    to: "lib",
++    preload: true
++  },
++  "@components" => {
++    source: "app/javascript/react/components",
++    under: "@components",
++    to: "react/components",
++    preload: true
++  },
++  "@legacy" => {
++    source: "app/javascript/legacy",
++    under: "@legacy",
++    to: "legacy",
++    preload: false
++  }
++}
++
++resolve_alias.each_value do |config|
++  pin_all_from config.fetch(:source), under: config.fetch(:under), to: config.fetch(:to), preload: config.fetch(:preload), integrity: true
++end
++
++pin "packs/application", to: "legacy/packs/application.js", preload: false, integrity: true
+diff --git a/test/dummy/config/initializers/assets.rb b/test/dummy/config/initializers/assets.rb
+index 8edcc35..601e791 100644
+--- a/test/dummy/config/initializers/assets.rb
++++ b/test/dummy/config/initializers/assets.rb
+@@ -1,15 +1,16 @@
+-# Be sure to restart your server when you modify this file.
+-
+-# Version of your assets, change this if you want to expire all your assets.
+-Rails.application.config.assets.version = '1.0'
+-
+-# Add additional assets to the asset load path.
+-# Rails.application.config.assets.paths << Emoji.images_path
++Rails.application.config.assets.version = "2.0"
+ Rails.application.config.assets.paths << Rails.root.join("app/components")
++Rails.application.config.assets.paths << Rails.root.join("app/javascript")
++Rails.application.config.assets.integrity_hash_algorithm = "sha384"
+ 
+-# Precompile additional assets.
+-# application.js, application.css, and all non-JS/CSS in the app/assets
+-# folder are already added.
+-# Rails.application.config.assets.precompile += %w( admin.js admin.css )
++packs_path = Rails.root.join("app/javascript/packs")
++Rails.application.config.assets.paths.delete(packs_path)
++Rails.application.config.assets.paths.delete(packs_path.to_s)
+ 
+-Rails.application.config.assets.integrity_hash_algorithm = "sha384"
++if Rails.application.config.assets.respond_to?(:excluded_paths)
++  Rails.application.config.assets.excluded_paths << packs_path
++end
++
++if Rails.application.config.assets.respond_to?(:cache_digests=)
++  Rails.application.config.assets.cache_digests = true
++end
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..6a791f4 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -20,33 +20,29 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+   end
+ 
+   test "javascript_inline_importmap_tag" do
+-    assert_dom_equal(
+-      %(
+-      <script type="importmap" data-turbo-track="reload">
+-        {
+-          "imports": {
+-            "md5": "https://cdn.skypack.dev/md5",
+-            "not_there": "/nowhere.js",
+-            "rich_text": "/rich_text.js"
+-          },
+-          "integrity": {
+-            "/rich_text.js": "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+-          }
+-        }
+-      </script>
+-      ),
+-      javascript_inline_importmap_tag
+-    )
++    rendered = javascript_inline_importmap_tag
++    importmap = JSON.parse(rendered[%r{<script[^>]*>(.*)</script>}m, 1])
++
++    assert_equal "https://ga.jspm.io/npm:react@18.3.1/index.js", importmap.dig("imports", "react")
++    assert_equal "https://ga.jspm.io/npm:react-dom@18.3.1/client.js", importmap.dig("imports", "react-dom/client")
++    assert_match %r{/assets/application-.*\.js}, importmap.dig("imports", "application")
++    assert_match %r{/assets/lib/bootstrap-.*\.js}, importmap.dig("imports", "@app/bootstrap")
++
++    application_path = importmap.dig("imports", "application")
++    bootstrap_path = importmap.dig("imports", "@app/bootstrap")
++
++    assert importmap.dig("integrity", application_path)
++    assert importmap.dig("integrity", bootstrap_path)
+   end
+ 
+   test "javascript_importmap_module_preload_tags" do
+-    assert_dom_equal(
+-      %(
+-        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
+-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
+-      ),
+-      javascript_importmap_module_preload_tags
+-    )
++    rendered = javascript_importmap_module_preload_tags
++
++    assert_includes rendered, %{href="https://ga.jspm.io/npm:react@18.3.1/index.js"}
++    assert_includes rendered, %{href="https://ga.jspm.io/npm:react-dom@18.3.1/client.js"}
++    assert_match %r{href="/assets/application-.*\.js"[^>]*integrity=}m, rendered
++    assert_match %r{href="/assets/react/components/app_shell-.*\.js"[^>]*integrity=}m, rendered
++    refute_includes rendered, "module_compat"
+   end
+ 
+   test "tags have no nonce if CSP is not configured" do
+diff --git a/test/reloader_test.rb b/test/reloader_test.rb
+index 60de5f4..8833b57 100644
+--- a/test/reloader_test.rb
++++ b/test/reloader_test.rb
+@@ -3,7 +3,7 @@ require "test_helper"
+ class ReloaderTest < ActiveSupport::TestCase
+   setup do
+     @reloader = Importmap::Reloader.new
+-    @config   = Rails.root.join("config/importmap.rb")
++    @config = Rails.root.join("config/importmap.rb")
+   end
+ 
+   test "reload is triggered when importmap changes" do
+@@ -16,7 +16,7 @@ class ReloaderTest < ActiveSupport::TestCase
+     Rails.application.importmap = Importmap::Map.new.draw { pin "md5", to: "https://cdn.skypack.dev/md5" }
+     assert_not_predicate @reloader, :updated?
+ 
+-    assert_changes -> { Rails.application.importmap.packages.keys }, from: %w[ md5 ], to: %w[ md5 not_there rich_text ] do
++    assert_changes -> { Rails.application.importmap.packages.keys.sort }, from: ["md5"], to: ["@app/bootstrap", "@components/app_shell", "@components/status_panel", "@legacy/module_compat", "@legacy/packs/application", "application", "packs/application", "react", "react-dom", "react-dom/client", "rich_text", "scheduler"] do
+       touch_config
+       assert @reloader.execute_if_updated
+     end
