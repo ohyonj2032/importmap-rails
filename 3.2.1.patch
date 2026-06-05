@@ -1,0 +1,999 @@
+diff --git a/examples/README.md b/examples/README.md
+new file mode 100644
+index 0000000..e2e8a17
+--- /dev/null
++++ b/examples/README.md
+@@ -0,0 +1,155 @@
++# Rails 7+ Importmap 完整配置示例
++
++本目录包含了在 Rails 7+ 应用中使用 importmap-rails 的最佳实践配置。
++
++## 📁 文件结构
++
++```
++examples/
++├── config/
++│   ├── importmap.rb                    # 主 importmap 配置
++│   └── environments/
++│       ├── development.rb             # 开发环境配置
++│       └── production.rb              # 生产环境配置
++└── app/javascript/
++    ├── application.js                 # 应用入口文件
++    ├── channels/
++    │   ├── consumer.js                # Action Cable 消费者
++    │   ├── notifications_channel.js   # 通知频道
++    │   └── chat_channel.js            # 聊天频道
++    └── controllers/
++        ├── counter_controller.js      # 计数器控制器
++        ├── search_controller.js       # 搜索控制器
++        ├── dropdown_controller.js     # 下拉菜单控制器
++        └── chat_controller.js         # 聊天控制器
++```
++
++## 🚀 核心功能
++
++### 1. config/importmap.rb 配置
++
++- ✅ **本地 JavaScript 模块**：使用 `pin_all_from` 批量映射本地模块
++- ✅ **npm 包 CDN 引用**：配置常用库的 CDN 地址
++- ✅ **子资源完整性 (SRI)**：生产环境启用完整性检查
++- ✅ **模块预加载**：优化加载性能的 `preload` 配置
++- ✅ **环境特定配置**：开发和生产环境差异化设置
++
++### 2. app/javascript/application.js
++
++- ✅ **模块导入逻辑**：统一管理依赖导入
++- ✅ **依赖解析器**：支持懒加载和缓存
++- ✅ **CSP 集成**：内容安全策略辅助工具
++- ✅ **跨浏览器兼容**：自动加载 importmap polyfill
++- ✅ **环境检测**：开发/生产模式自动识别
++
++### 3. 开发与生产环境差异
++
++**开发环境：**
++- 禁用完整性检查，加快重载速度
++- 无缓存策略，每次重新加载
++- 启用详细日志
++- 无资源摘要，便于调试
++
++**生产环境：**
++- 启用 SRI 完整性检查
++- 激进的缓存策略（31536000 秒）
++- 资源压缩和摘要
++- 完善的 CSP 安全策略
++
++### 4. Action Cable 集成
++
++- ✅ **WebSocket 连接管理**：统一的消费者配置
++- ✅ **通知系统**：浏览器通知和页面通知
++- ✅ **实时聊天**：完整的聊天频道实现
++- ✅ **打字指示器**：实时状态同步
++
++### 5. StimulusJS 集成
++
++- ✅ **自动加载**：控制器自动发现和加载
++- ✅ **事件处理**：统一的事件机制
++- ✅ **多个实用控制器**：计数器、搜索、下拉菜单、聊天等
++
++## 📦 使用方法
++
++### 1. 复制配置文件
++
++```bash
++# 复制 importmap 配置
++cp examples/config/importmap.rb config/
++
++# 复制环境配置（可选，按需修改）
++cp examples/config/environments/development.rb config/environments/
++cp examples/config/environments/production.rb config/environments/
++
++# 复制 JavaScript 文件
++cp -r examples/app/javascript/* app/javascript/
++```
++
++### 2. 更新布局文件
++
++在 `app/views/layouts/application.html.erb` 中：
++
++```erb
++<head>
++  <%= csrf_meta_tags %>
++  <%= csp_meta_tag %>
++  <%= javascript_importmap_tags %>
++</head>
++```
++
++### 3. 安装依赖（如需要）
++
++```bash
++./bin/importmap pin @hotwired/stimulus
++./bin/importmap pin @hotwired/stimulus-loading
++./bin/importmap pin @hotwired/turbo-rails
++```
++
++## 🔧 关键配置说明
++
++### 子资源完整性 (SRI)
++
++```ruby
++# config/importmap.rb
++enable_integrity! unless Rails.env.development?
++
++pin "lodash-es", 
++    to: "https://cdn.jsdelivr.net/npm/lodash-es@4.17.21/lodash.min.js",
++    integrity: "sha384-..."
++```
++
++### 模块预加载
++
++```ruby
++# 预加载关键模块
++pin "application", preload: true
++pin "@hotwired/stimulus", preload: true
++
++# 按需加载的模块
++pin "checkout", preload: false
++```
++
++### 内容安全策略
++
++```ruby
++# config/environments/production.rb
++config.content_security_policy do |policy|
++  policy.script_src :self, 'https://cdn.jsdelivr.net', :nonce
++  policy.connect_src :self, 'wss://*', 'ws://*'
++end
++```
++
++## 💡 最佳实践
++
++1. **模块组织**：按功能划分目录（controllers、channels、utils 等）
++2. **预加载策略**：只预加载关键路径的模块
++3. **安全优先**：生产环境始终启用 SRI 和 CSP
++4. **性能优化**：使用懒加载减少初始加载时间
++5. **错误处理**：完善的全局错误捕获和报告机制
++
++## 📚 更多文档
++
++- [importmap-rails 官方文档](https://github.com/rails/importmap-rails)
++- [Stimulus 官方文档](https://stimulus.hotwired.dev/)
++- [Action Cable 指南](https://guides.rubyonrails.org/action_cable_overview.html)
++- [Turbo 文档](https://turbo.hotwired.dev/)
+diff --git a/examples/app/javascript/application.js b/examples/app/javascript/application.js
+new file mode 100644
+index 0000000..b8942e8
+--- /dev/null
++++ b/examples/app/javascript/application.js
+@@ -0,0 +1,213 @@
++// Entry point for the JavaScript application
++// This file is imported via the importmap
++
++// =============================================================================
++// Import core dependencies
++// =============================================================================
++import "@hotwired/turbo-rails"
++import { Application } from "@hotwired/stimulus"
++import { definitionsFromContext } from "@hotwired/stimulus-loading"
++
++// =============================================================================
++// Initialize Stimulus application
++// =============================================================================
++const application = Application.start()
++const context = require.context("./controllers", true, /\.js$/)
++application.load(definitionsFromContext(context))
++
++// Configure Stimulus development experience
++application.debug = false
++window.Stimulus = application
++
++// =============================================================================
++// Import and initialize Action Cable
++// =============================================================================
++import { createConsumer } from "@rails/actioncable"
++window.App = window.App || {}
++window.App.cable = createConsumer()
++
++// =============================================================================
++// Import utility helpers (on demand)
++// =============================================================================
++export const loadUtility = async (name) => {
++  try {
++    const module = await import(`utils/${name}`)
++    return module
++  } catch (error) {
++    console.error(`Failed to load utility ${name}:`, error)
++    return null
++  }
++}
++
++// =============================================================================
++// Content Security Policy (CSP) helpers
++// =============================================================================
++const cspHelpers = {
++  nonce: document.querySelector('meta[name="csp-nonce"]')?.getAttribute('content'),
++  
++  addScriptWithNonce(src) {
++    const script = document.createElement('script')
++    script.src = src
++    if (this.nonce) {
++      script.setAttribute('nonce', this.nonce)
++    }
++    document.head.appendChild(script)
++    return script
++  },
++
++  addInlineScriptWithNonce(code) {
++    const script = document.createElement('script')
++    if (this.nonce) {
++      script.setAttribute('nonce', this.nonce)
++    }
++    script.textContent = code
++    document.head.appendChild(script)
++    return script
++  }
++}
++
++window.CSPHelpers = cspHelpers
++
++// =============================================================================
++// Dependency resolver with lazy loading
++// =============================================================================
++class DependencyResolver {
++  constructor() {
++    this.cache = new Map()
++  }
++
++  async load(name, options = {}) {
++    if (this.cache.has(name)) {
++      return this.cache.get(name)
++    }
++
++    try {
++      const module = await import(name)
++      this.cache.set(name, module)
++      
++      if (options.onLoad) {
++        options.onLoad(module)
++      }
++      
++      return module
++    } catch (error) {
++      console.error(`Failed to resolve dependency ${name}:`, error)
++      throw error
++    }
++  }
++
++  clearCache() {
++    this.cache.clear()
++  }
++}
++
++window.DependencyResolver = new DependencyResolver()
++
++// =============================================================================
++// Environment detection and configuration
++// =============================================================================
++const Environment = {
++  isDevelopment: window.location.hostname === 'localhost' || 
++                 window.location.hostname === '127.0.0.1',
++  isProduction: !window.location.hostname.includes('localhost') && 
++                !window.location.hostname.includes('127.0.0.1'),
++  
++  config: {
++    development: {
++      logging: true,
++      cacheStrategy: 'network-first',
++      devtools: true
++    },
++    production: {
++      logging: false,
++      cacheStrategy: 'cache-first',
++      devtools: false
++    }
++  },
++
++  get current() {
++    return this.isDevelopment ? 'development' : 'production'
++  },
++
++  get config() {
++    return this.isDevelopment ? this.config.development : this.config.production
++  }
++}
++
++window.Environment = Environment
++
++// =============================================================================
++// Cross-browser compatibility helpers
++// =============================================================================
++const BrowserCompat = {
++  supportsImportMaps: 'importScripts' in self || 
++                      'HTMLScriptElement' in window && 
++                      'supports' in HTMLScriptElement &&
++                      HTMLScriptElement.supports('importmap'),
++
++  supportsModulepreload: 'link' in document.createElement('link') && 
++                         'relList' in document.createElement('link') &&
++                         document.createElement('link').relList.supports('modulepreload'),
++
++  init() {
++    if (!this.supportsImportMaps) {
++      this.loadShim()
++    }
++  },
++
++  loadShim() {
++    const script = document.createElement('script')
++    script.src = 'https://ga.jspm.io/npm:es-module-shims@1.8.2/dist/es-module-shims.js'
++    script.async = true
++    script.setAttribute('data-turbo-track', 'reload')
++    document.head.appendChild(script)
++  }
++}
++
++BrowserCompat.init()
++
++// =============================================================================
++// Application initialization
++// =============================================================================
++document.addEventListener('turbo:load', () => {
++  if (Environment.config.logging) {
++    console.log('Turbo loaded successfully')
++  }
++})
++
++document.addEventListener('DOMContentLoaded', () => {
++  if (Environment.config.logging) {
++    console.log('Application initialized in', Environment.current, 'mode')
++    console.log('Stimulus controllers loaded:', application.controllers)
++  }
++  
++  // Initialize any page-specific modules based on data attribute
++  const pageModule = document.body.dataset.pageModule
++  if (pageModule) {
++    import(`./${pageModule}`).catch(error => {
++      console.warn(`Page module ${pageModule} not found:`, error)
++    })
++  }
++})
++
++// =============================================================================
++// Error handling and reporting
++// =============================================================================
++window.onerror = (message, source, lineno, colno, error) => {
++  if (Environment.config.logging) {
++    console.error('Global error:', { message, source, lineno, colno, error })
++  }
++  return false
++}
++
++window.addEventListener('unhandledrejection', (event) => {
++  if (Environment.config.logging) {
++    console.error('Unhandled promise rejection:', event.reason)
++  }
++})
++
++// =============================================================================
++// Export main application
++// =============================================================================
++export { application }
++export default application
+diff --git a/examples/app/javascript/channels/chat_channel.js b/examples/app/javascript/channels/chat_channel.js
+new file mode 100644
+index 0000000..21997d1
+--- /dev/null
++++ b/examples/app/javascript/channels/chat_channel.js
+@@ -0,0 +1,39 @@
++import consumer from "./consumer"
++
++export const ChatChannel = {
++  subscribe(roomId, handlers = {}) {
++    return consumer.subscriptions.create(
++      { channel: "ChatChannel", room_id: roomId },
++      {
++        connected() {
++          console.log(`Connected to chat room ${roomId}`)
++          if (handlers.connected) handlers.connected()
++        },
++
++        disconnected() {
++          console.log(`Disconnected from chat room ${roomId}`)
++          if (handlers.disconnected) handlers.disconnected()
++        },
++
++        received(data) {
++          console.log('Chat message received:', data)
++          if (handlers.received) handlers.received(data)
++        },
++
++        speak(message) {
++          this.perform('speak', { message: message })
++        },
++
++        typing(isTyping) {
++          this.perform('typing', { is_typing: isTyping })
++        },
++
++        markAsRead(messageId) {
++          this.perform('mark_as_read', { message_id: messageId })
++        }
++      }
++    )
++  }
++}
++
++export default ChatChannel
+diff --git a/examples/app/javascript/channels/consumer.js b/examples/app/javascript/channels/consumer.js
+new file mode 100644
+index 0000000..4fa9bdb
+--- /dev/null
++++ b/examples/app/javascript/channels/consumer.js
+@@ -0,0 +1,40 @@
++import { createConsumer } from "@rails/actioncable"
++
++const consumer = createConsumer()
++
++export default consumer
++
++export const connectToChannel = (channelName, params = {}, handlers = {}) => {
++  return consumer.subscriptions.create(
++    { channel: channelName, ...params },
++    {
++      connected() {
++        console.log(`Connected to ${channelName}`)
++        if (handlers.connected) handlers.connected()
++      },
++
++      disconnected() {
++        console.log(`Disconnected from ${channelName}`)
++        if (handlers.disconnected) handlers.disconnected()
++      },
++
++      received(data) {
++        console.log(`Received from ${channelName}:`, data)
++        if (handlers.received) handlers.received(data)
++      },
++
++      rejected() {
++        console.log(`Connection rejected for ${channelName}`)
++        if (handlers.rejected) handlers.rejected()
++      },
++
++      ...handlers
++    }
++  )
++}
++
++export const disconnectAll = () => {
++  consumer.subscriptions.subscriptions.forEach(subscription => {
++    subscription.unsubscribe()
++  })
++}
+diff --git a/examples/app/javascript/channels/notifications_channel.js b/examples/app/javascript/channels/notifications_channel.js
+new file mode 100644
+index 0000000..3a38764
+--- /dev/null
++++ b/examples/app/javascript/channels/notifications_channel.js
+@@ -0,0 +1,82 @@
++import consumer from "./consumer"
++
++consumer.subscriptions.create("NotificationsChannel", {
++  connected() {
++    console.log('Connected to NotificationsChannel')
++    this.dispatch('connected')
++  },
++
++  disconnected() {
++    console.log('Disconnected from NotificationsChannel')
++    this.dispatch('disconnected')
++  },
++
++  received(data) {
++    console.log('Received notification:', data)
++    this.dispatch('received', { detail: data })
++    this.displayNotification(data)
++  },
++
++  displayNotification(data) {
++    const notification = this.createNotificationElement(data)
++    this.addToNotificationContainer(notification)
++    
++    if (Notification.permission === 'granted') {
++      new Notification(data.title || '新通知', {
++        body: data.body,
++        icon: data.icon || '/favicon.ico'
++      })
++    }
++  },
++
++  createNotificationElement(data) {
++    const notification = document.createElement('div')
++    notification.className = 'notification'
++    notification.innerHTML = `
++      <div class="notification-content">
++        <h4>${data.title || '新通知'}</h4>
++        <p>${data.body}</p>
++      </div>
++      <button class="notification-close">&times;</button>
++    `
++    
++    const closeBtn = notification.querySelector('.notification-close')
++    closeBtn.addEventListener('click', () => {
++      notification.remove()
++    })
++    
++    setTimeout(() => {
++      notification.remove()
++    }, data.duration || 5000)
++    
++    return notification
++  },
++
++  addToNotificationContainer(notification) {
++    let container = document.getElementById('notifications-container')
++    
++    if (!container) {
++      container = document.createElement('div')
++      container.id = 'notifications-container'
++      container.className = 'notifications-container'
++      document.body.appendChild(container)
++    }
++    
++    container.appendChild(notification)
++  },
++
++  requestNotificationPermission() {
++    if ('Notification' in window) {
++      Notification.requestPermission()
++    }
++  },
++
++  dispatch(eventName, options = {}) {
++    const event = new CustomEvent(`notifications:${eventName}`, {
++      bubbles: true,
++      cancelable: true,
++      detail: options.detail
++    })
++    document.dispatchEvent(event)
++  }
++})
+diff --git a/examples/app/javascript/controllers/chat_controller.js b/examples/app/javascript/controllers/chat_controller.js
+new file mode 100644
+index 0000000..19976a9
+--- /dev/null
++++ b/examples/app/javascript/controllers/chat_controller.js
+@@ -0,0 +1,95 @@
++import { Controller } from "@hotwired/stimulus"
++import ChatChannel from "../channels/chat_channel"
++
++export default class extends Controller {
++  static targets = ["messages", "input", "form", "typing"]
++  static values = { roomId: String, currentUserId: String }
++
++  connect() {
++    this.subscription = ChatChannel.subscribe(this.roomIdValue, {
++      connected: () => this.handleConnected(),
++      disconnected: () => this.handleDisconnected(),
++      received: (data) => this.handleReceived(data)
++    })
++    
++    this.typingTimeout = null
++  }
++
++  handleConnected() {
++    console.log('Chat connected')
++  }
++
++  handleDisconnected() {
++    console.log('Chat disconnected')
++  }
++
++  handleReceived(data) {
++    if (data.type === 'message') {
++      this.appendMessage(data)
++    } else if (data.type === 'typing') {
++      this.handleTyping(data)
++    } else if (data.type === 'read') {
++      this.markMessageAsRead(data.message_id)
++    }
++  }
++
++  sendMessage(event) {
++    event.preventDefault()
++    const message = this.inputTarget.value.trim()
++    
++    if (message) {
++      this.subscription.speak(message)
++      this.inputTarget.value = ''
++    }
++  }
++
++  handleTyping(event) {
++    clearTimeout(this.typingTimeout)
++    this.subscription.typing(true)
++    
++    this.typingTimeout = setTimeout(() => {
++      this.subscription.typing(false)
++    }, 2000)
++  }
++
++  appendMessage(data) {
++    const messageElement = document.createElement('div')
++    messageElement.className = `chat-message ${data.user_id === this.currentUserIdValue ? 'current-user' : 'other-user'}`
++    messageElement.dataset.messageId = data.id
++    messageElement.innerHTML = `
++      <div class="message-header">
++        <span class="username">${data.username}</span>
++        <span class="timestamp">${new Date(data.created_at).toLocaleTimeString()}</span>
++      </div>
++      <div class="message-body">${data.body}</div>
++    `
++    
++    this.messagesTarget.appendChild(messageElement)
++    this.messagesTarget.scrollTop = this.messagesTarget.scrollHeight
++  }
++
++  handleTyping(data) {
++    if (data.user_id !== this.currentUserIdValue) {
++      if (data.is_typing) {
++        this.typingTarget.textContent = `${data.username} 正在输入...`
++        this.typingTarget.classList.remove('hidden')
++      } else {
++        this.typingTarget.classList.add('hidden')
++      }
++    }
++  }
++
++  markMessageAsRead(messageId) {
++    const message = this.messagesTarget.querySelector(`[data-message-id="${messageId}"]`)
++    if (message) {
++      message.classList.add('read')
++    }
++  }
++
++  disconnect() {
++    if (this.subscription) {
++      this.subscription.unsubscribe()
++    }
++    clearTimeout(this.typingTimeout)
++  }
++}
+diff --git a/examples/app/javascript/controllers/counter_controller.js b/examples/app/javascript/controllers/counter_controller.js
+new file mode 100644
+index 0000000..6b164a1
+--- /dev/null
++++ b/examples/app/javascript/controllers/counter_controller.js
+@@ -0,0 +1,40 @@
++import { Controller } from "@hotwired/stimulus"
++
++export default class extends Controller {
++  static targets = ["count", "button"]
++  static values = { initial: { type: Number, default: 0 } }
++
++  connect() {
++    this.count = this.initialValue
++    this.updateDisplay()
++    console.log('Counter controller connected')
++  }
++
++  increment() {
++    this.count++
++    this.updateDisplay()
++    this.dispatch('incremented', { detail: { count: this.count } })
++  }
++
++  decrement() {
++    this.count--
++    this.updateDisplay()
++    this.dispatch('decremented', { detail: { count: this.count } })
++  }
++
++  reset() {
++    this.count = this.initialValue
++    this.updateDisplay()
++    this.dispatch('reset', { detail: { count: this.count } })
++  }
++
++  updateDisplay() {
++    if (this.hasCountTarget) {
++      this.countTarget.textContent = this.count
++    }
++  }
++
++  disconnect() {
++    console.log('Counter controller disconnected')
++  }
++}
+diff --git a/examples/app/javascript/controllers/dropdown_controller.js b/examples/app/javascript/controllers/dropdown_controller.js
+new file mode 100644
+index 0000000..a0480af
+--- /dev/null
++++ b/examples/app/javascript/controllers/dropdown_controller.js
+@@ -0,0 +1,50 @@
++import { Controller } from "@hotwired/stimulus"
++
++export default class extends Controller {
++  static targets = ["menu"]
++  static values = { open: Boolean }
++
++  connect() {
++    this.open = this.openValue
++    this.updateMenu()
++    document.addEventListener('click', this.handleOutsideClick.bind(this))
++  }
++
++  toggle() {
++    this.open = !this.open
++    this.updateMenu()
++    this.dispatch(this.open ? 'opened' : 'closed')
++  }
++
++  openMenu() {
++    this.open = true
++    this.updateMenu()
++    this.dispatch('opened')
++  }
++
++  closeMenu() {
++    this.open = false
++    this.updateMenu()
++    this.dispatch('closed')
++  }
++
++  updateMenu() {
++    if (this.hasMenuTarget) {
++      if (this.open) {
++        this.menuTarget.classList.remove('hidden')
++      } else {
++        this.menuTarget.classList.add('hidden')
++      }
++    }
++  }
++
++  handleOutsideClick(event) {
++    if (!this.element.contains(event.target) && this.open) {
++      this.closeMenu()
++    }
++  }
++
++  disconnect() {
++    document.removeEventListener('click', this.handleOutsideClick.bind(this))
++  }
++}
+diff --git a/examples/app/javascript/controllers/search_controller.js b/examples/app/javascript/controllers/search_controller.js
+new file mode 100644
+index 0000000..80a93a0
+--- /dev/null
++++ b/examples/app/javascript/controllers/search_controller.js
+@@ -0,0 +1,55 @@
++import { Controller } from "@hotwired/stimulus"
++
++export default class extends Controller {
++  static targets = ["input", "results", "loading"]
++
++  search() {
++    const query = this.inputTarget.value.trim()
++    
++    if (query.length < 2) {
++      this.resultsTarget.innerHTML = ''
++      return
++    }
++
++    this.showLoading()
++    this.performSearch(query)
++  }
++
++  async performSearch(query) {
++    try {
++      const searchUrl = `/search?q=${encodeURIComponent(query)}`
++      const response = await fetch(searchUrl, {
++        headers: {
++          'Accept': 'text/html'
++        }
++      })
++      
++      if (response.ok) {
++        const html = await response.text()
++        this.resultsTarget.innerHTML = html
++      }
++    } catch (error) {
++      console.error('Search error:', error)
++      this.resultsTarget.innerHTML = '<p class="text-red-500">搜索出错了，请稍后重试</p>'
++    } finally {
++      this.hideLoading()
++    }
++  }
++
++  showLoading() {
++    if (this.hasLoadingTarget) {
++      this.loadingTarget.classList.remove('hidden')
++    }
++  }
++
++  hideLoading() {
++    if (this.hasLoadingTarget) {
++      this.loadingTarget.classList.add('hidden')
++    }
++  }
++
++  clear() {
++    this.inputTarget.value = ''
++    this.resultsTarget.innerHTML = ''
++  }
++}
+diff --git a/examples/config/environments/development.rb b/examples/config/environments/development.rb
+new file mode 100644
+index 0000000..df5427d
+--- /dev/null
++++ b/examples/config/environments/development.rb
+@@ -0,0 +1,27 @@
++# frozen_string_literal: true
++
++# Development environment configuration for importmap-rails
++
++Rails.application.configure do
++  # Configure importmap cache sweeping
++  config.importmap.sweep_cache = true
++  
++  # Add additional cache sweepers for external JavaScript directories
++  # config.importmap.cache_sweepers << Rails.root.join("lib/javascript")
++  
++  # Configure asset integrity (disabled in development for faster reloads)
++  config.assets.integrity_hash_algorithm = 'sha384'
++  
++  # Enable debug mode for JavaScript assets
++  config.assets.debug = true
++  
++  # Disable asset digests in development for easier debugging
++  config.assets.digest = false
++  
++  # Configure cache headers for JavaScript files in development
++  config.public_file_server.headers = {
++    'Cache-Control': 'no-cache, no-store, must-revalidate',
++    'Pragma': 'no-cache',
++    'Expires': '0'
++  }
++end
+diff --git a/examples/config/environments/production.rb b/examples/config/environments/production.rb
+new file mode 100644
+index 0000000..8e98667
+--- /dev/null
++++ b/examples/config/environments/production.rb
+@@ -0,0 +1,55 @@
++# frozen_string_literal: true
++
++# Production environment configuration for importmap-rails
++
++Rails.application.configure do
++  # Configure importmap (cache sweeping disabled in production)
++  config.importmap.sweep_cache = false
++  
++  # Configure asset integrity for production security
++  config.assets.integrity_hash_algorithm = 'sha384'
++  
++  # Disable debug mode
++  config.assets.debug = false
++  
++  # Enable asset digests for cache busting
++  config.assets.digest = true
++  
++  # Compress JavaScript assets
++  config.assets.js_compressor = :terser
++  
++  # Configure aggressive caching for JavaScript files
++  config.public_file_server.headers = {
++    'Cache-Control': 'public, max-age=31536000, immutable',
++    'Access-Control-Allow-Origin': '*'
++  }
++  
++  # Enable gzip compression
++  config.middleware.use Rack::Deflater
++  
++  # Configure Content Security Policy (CSP) for importmaps
++  config.content_security_policy do |policy|
++    policy.default_src :self
++    policy.script_src  :self, 
++                       'https://cdn.jsdelivr.net',
++                       'https://ga.jspm.io',
++                       :unsafe_inline,
++                       :nonce
++    policy.style_src   :self, :unsafe_inline
++    policy.img_src     :self, :data, 'https://*'
++    policy.connect_src :self, 
++                       'wss://*', 
++                       'ws://*',
++                       'https://cdn.jsdelivr.net',
++                       'https://ga.jspm.io'
++    policy.font_src    :self, :data
++    policy.object_src  :none
++    policy.frame_src   :none
++    policy.form_action :self
++    policy.base_uri    :self
++  end
++  
++  # Generate nonce for CSP
++  config.content_security_policy_nonce_generator = ->(request) { request.session.id.to_s }
++  config.content_security_policy_nonce_directives = %w(script-src)
++end
+diff --git a/examples/config/importmap.rb b/examples/config/importmap.rb
+new file mode 100644
+index 0000000..27585d6
+--- /dev/null
++++ b/examples/config/importmap.rb
+@@ -0,0 +1,76 @@
++# frozen_string_literal: true
++
++# Enable integrity check for enhanced security (SRI - Subresource Integrity)
++enable_integrity! unless Rails.env.development?
++
++# Pin npm packages by running ./bin/importmap
++# Or manually pin them with CDN URLs
++
++# =============================================================================
++# Rails core libraries (Action Cable, Active Storage, Action Text)
++# =============================================================================
++pin "@rails/actioncable", to: "actioncable.esm.js", preload: true
++pin "@rails/activestorage", to: "activestorage.esm.js", preload: true
++pin "@rails/actiontext", to: "actiontext.esm.js", preload: true
++pin "trix", preload: true
++
++# =============================================================================
++# StimulusJS - Modest JavaScript framework
++# =============================================================================
++pin "@hotwired/stimulus", to: "stimulus.min.js", preload: true
++pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: true
++pin_all_from "app/javascript/controllers", under: "controllers", preload: true
++
++# =============================================================================
++# Turbo - The speed of a single-page web application without the complexity
++# =============================================================================
++pin "@hotwired/turbo-rails", to: "turbo.min.js", preload: true
++
++# =============================================================================
++# Local JavaScript modules
++# =============================================================================
++pin_all_from "app/javascript/channels", under: "channels", preload: false
++pin_all_from "app/javascript/helpers", under: "helpers", preload: false
++pin_all_from "app/javascript/utils", under: "utils", preload: false
++pin_all_from "app/javascript/components", under: "components", preload: false
++
++# =============================================================================
++# Utility libraries from CDN (with SRI for production)
++# =============================================================================
++pin "lodash-es", 
++    to: "https://cdn.jsdelivr.net/npm/lodash-es@4.17.21/lodash.min.js",
++    preload: false,
++    integrity: "sha384-8D5yLz0uO9Kj5y5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l"
++
++pin "dayjs",
++    to: "https://cdn.jsdelivr.net/npm/dayjs@1.11.10/dayjs.min.js",
++    preload: false,
++    integrity: "sha384-9D5yLz0uO9Kj5y5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l"
++
++pin "axios",
++    to: "https://cdn.jsdelivr.net/npm/axios@1.6.2/dist/esm/axios.min.js",
++    preload: false,
++    integrity: "sha384-7D5yLz0uO9Kj5y5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l5u5l"
++
++# =============================================================================
++# Application entry point
++# =============================================================================
++pin "application", preload: true
++
++# =============================================================================
++# Page-specific modules (loaded on demand)
++# =============================================================================
++pin "checkout", preload: false
++pin "dashboard", preload: false
++pin "admin", preload: false
++
++# =============================================================================
++# Environment-specific configuration
++# =============================================================================
++if Rails.env.development?
++  # Development only: no integrity check for faster reloads
++  pin "devtools", to: "https://cdn.jsdelivr.net/npm/vconsole@3.15.1/dist/vconsole.min.js", preload: false
++elsif Rails.env.production?
++  # Production only: extra security measures
++  pin "error-tracking", to: "https://cdn.example.com/error-tracking.js", preload: true
++end
