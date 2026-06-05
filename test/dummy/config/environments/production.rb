@@ -114,5 +114,9 @@ Rails.application.configure do
   # these configuration options.
   # config.active_record.database_selector = { delay: 2.seconds }
   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
-  # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+  # Ensure importmap cache is NOT swept in production for performance
+  config.importmap.sweep_cache = false
+
+  # Required for Subresource Integrity (SRI) support if using Propshaft
+  config.assets.integrity_hash_algorithm = 'sha256'
 end

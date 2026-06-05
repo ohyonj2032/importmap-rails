@@ -1,7 +1,17 @@
+# Enable Subresource Integrity (SRI) for enhanced security
 enable_integrity!
 
-pin_all_from "app/assets/javascripts"
+# Map local JavaScript modules
+pin "application", preload: true
+pin_all_from "app/javascript/controllers", under: "controllers", preload: true
+pin "channels", to: "channels/index.js", preload: false
+pin_all_from "app/javascript/channels", under: "channels", preload: false
 
-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
-pin "not_there", to: "nowhere.js", preload: false, integrity: false
-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+# Map npm packages using CDN
+pin "@hotwired/turbo-rails", to: "turbo.min.js", preload: true
+pin "@hotwired/stimulus", to: "stimulus.min.js", preload: true
+pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: true
+pin "@rails/actioncable", to: "actioncable.esm.js", preload: true
+
+# Example: CDN reference with specific Subresource Integrity (SRI) and lazy loading
+pin "lodash", to: "https://ga.jspm.io/npm:lodash@4.17.21/lodash.js", preload: false, integrity: "sha384-PkIkha4kVPRlGtFantHjuv+Y9mRefUHpLFQbgOYUjzy247kvi16kLR7wWnsAmqZF"

@@ -7,6 +7,12 @@
     <%= csp_meta_tag %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+
+    <!-- Cross-browser compatibility for older browsers (e.g., iOS 15) -->
+    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js" data-turbo-track="reload"></script>
+
+    <!-- Configure importmap and modulepreloads (with nonce for CSP integration) -->
+    <%= javascript_importmap_tags nonce: true %>
   </head>
 
   <body>

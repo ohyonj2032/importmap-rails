@@ -1,0 +1,178 @@
+diff --git a/test/dummy/app/controllers/application_controller.rb b/test/dummy/app/controllers/application_controller.rb
+index 09705d1..22f083b 100644
+--- a/test/dummy/app/controllers/application_controller.rb
++++ b/test/dummy/app/controllers/application_controller.rb
+@@ -1,2 +1,5 @@
+ class ApplicationController < ActionController::Base
++  # Includes the digest of the import map into ETag calculation.
++  # Otherwise your application will return 304 cache responses even when your JavaScript assets have changed.
++  stale_when_importmap_changes
+ end
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..ada50a3 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,45 @@
++// Entry point for the build script in your package.json
++// This file is automatically loaded by the import map.
++
++// 1. Dependency resolution and core library imports
++import "@hotwired/turbo-rails"
++
++// 2. Stimulus setup for component controllers
++import { Application } from "@hotwired/stimulus"
++// Use eager loading for controllers in production/development as configured in importmap
++import { eagerLoadControllersFrom } from "@hotwired/stimulus-loading"
++
++// 3. Action Cable setup for WebSockets
++import { createConsumer } from "@rails/actioncable"
++
++// Initialize Stimulus application
++const application = Application.start()
++// Configure Stimulus development experience
++application.debug = false
++window.Stimulus = application
++
++// Eager load all controllers from the "controllers" under app/javascript/controllers
++// In a real app, this integrates with importmap-rails stimulus loading
++eagerLoadControllersFrom("controllers", application)
++
++// Setup Action Cable consumer and attach to global window object
++// This ensures WebSocket connection and event handling mechanism are ready
++const consumer = createConsumer()
++window.ActionCable = consumer
++
++// Export for application-wide usage
++export { application, consumer }
++
++// Import all Action Cable channels
++import "channels"
++
++// Example of conditional loading for performance optimization
++// e.g., Lazy loading lodash only when needed
++document.addEventListener("turbo:load", () => {
++  console.log("Application initialized successfully!")
++  
++  // Example: Lazy load lodash
++  // import("lodash").then(_) => {
++  //   console.log(_.capitalize("hello world from lodash!"))
++  // })
++})
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..f588780 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,6 +7,12 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++
++    <!-- Cross-browser compatibility for older browsers (e.g., iOS 15) -->
++    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js" data-turbo-track="reload"></script>
++
++    <!-- Configure importmap and modulepreloads (with nonce for CSP integration) -->
++    <%= javascript_importmap_tags nonce: true %>
+   </head>
+ 
+   <body>
+diff --git a/test/dummy/config/environments/development.rb b/test/dummy/config/environments/development.rb
+index d533da7..4648d09 100644
+--- a/test/dummy/config/environments/development.rb
++++ b/test/dummy/config/environments/development.rb
+@@ -68,4 +68,7 @@ Rails.application.configure do
+ 
+   # Uncomment if you wish to allow Action Cable access from any origin.
+   # config.action_cable.disable_request_forgery_protection = true
++
++  # Sweep importmap cache on changes to config/importmap.rb and app/javascript in development
++  config.importmap.sweep_cache = true
+ end
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..0e88316 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -114,5 +114,9 @@ Rails.application.configure do
+   # these configuration options.
+   # config.active_record.database_selector = { delay: 2.seconds }
+   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+-  # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
++  # Ensure importmap cache is NOT swept in production for performance
++  config.importmap.sweep_cache = false
++
++  # Required for Subresource Integrity (SRI) support if using Propshaft
++  config.assets.integrity_hash_algorithm = 'sha256'
+ end
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..671aaca 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,17 @@
++# Enable Subresource Integrity (SRI) for enhanced security
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++# Map local JavaScript modules
++pin "application", preload: true
++pin_all_from "app/javascript/controllers", under: "controllers", preload: true
++pin "channels", to: "channels/index.js", preload: false
++pin_all_from "app/javascript/channels", under: "channels", preload: false
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++# Map npm packages using CDN
++pin "@hotwired/turbo-rails", to: "turbo.min.js", preload: true
++pin "@hotwired/stimulus", to: "stimulus.min.js", preload: true
++pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: true
++pin "@rails/actioncable", to: "actioncable.esm.js", preload: true
++
++# Example: CDN reference with specific Subresource Integrity (SRI) and lazy loading
++pin "lodash", to: "https://ga.jspm.io/npm:lodash@4.17.21/lodash.js", preload: false, integrity: "sha384-PkIkha4kVPRlGtFantHjuv+Y9mRefUHpLFQbgOYUjzy247kvi16kLR7wWnsAmqZF"
+diff --git a/test/dummy/config/initializers/content_security_policy.rb b/test/dummy/config/initializers/content_security_policy.rb
+index 41c4301..6e3699f 100644
+--- a/test/dummy/config/initializers/content_security_policy.rb
++++ b/test/dummy/config/initializers/content_security_policy.rb
+@@ -4,23 +4,31 @@
+ # For further information see the following documentation
+ # https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy
+ 
+-# Rails.application.config.content_security_policy do |policy|
+-#   policy.default_src :self, :https
+-#   policy.font_src    :self, :https, :data
+-#   policy.img_src     :self, :https, :data
+-#   policy.object_src  :none
+-#   policy.script_src  :self, :https
+-#   policy.style_src   :self, :https
++Rails.application.config.content_security_policy do |policy|
++  policy.default_src :self, :https
++  policy.font_src    :self, :https, :data
++  policy.img_src     :self, :https, :data
++  policy.object_src  :none
++  
++  # Allow script execution from self and configured CDNs for importmap-rails
++  policy.script_src  :self, :https, "https://ga.jspm.io", "https://cdn.jsdelivr.net", "https://unpkg.com"
++  
++  # Allow style loading from self and https
++  policy.style_src   :self, :https
+ 
+-#   # Specify URI for violation reports
+-#   # policy.report_uri "/csp-violation-report-endpoint"
+-# end
++  # Allow Action Cable websocket connections
++  policy.connect_src :self, :https, "ws://localhost:*", "ws://127.0.0.1:*", "wss://*"
++
++  # Specify URI for violation reports
++  # policy.report_uri "/csp-violation-report-endpoint"
++end
+ 
+ # If you are using UJS then enable automatic nonce generation
+ # Rails.application.config.content_security_policy_nonce_generator = -> request { SecureRandom.base64(16) }
+ 
+-# Set the nonce only to specific directives
+-# Rails.application.config.content_security_policy_nonce_directives = %w(script-src)
++# Enable automatic nonce generation for the importmap and modulepreloads tags
++Rails.application.config.content_security_policy_nonce_generator = -> request { request.session.id.to_s.presence || SecureRandom.base64(16) }
++Rails.application.config.content_security_policy_nonce_directives = %w(script-src)
+ 
+ # Report CSP violations to a specified URI
+ # For further information see the following documentation:
