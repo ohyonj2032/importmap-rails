@@ -1,0 +1,621 @@
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..d1a2b3c
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,102 @@
++# syntax=docker/dockerfile:1
++
++# ============================================================
++# Stage 1: build-deps — 安装所有构建依赖
++# ============================================================
++FROM ruby:3.3-slim AS build-deps
++WORKDIR /app
++
++RUN apt-get update -qq && \
++    apt-get install -y --no-install-recommends \
++      build-essential curl git nodejs npm && \
++    rm -rf /var/lib/apt/lists/*
++
++COPY Gemfile Gemfile.lock ./
++RUN bundle config set --local deployment true && \
++    bundle install --jobs=4 --retry=3
++
++COPY package.json package-lock.json ./
++RUN npm ci
++
++# ============================================================
++# Stage 2: esbuild-compile — 编译 TypeScript/JS
++# ============================================================
++FROM build-deps AS esbuild-compile
++WORKDIR /app
++COPY --from=build-deps /usr/local/bundle /usr/local/bundle
++COPY --from=build-deps /app/node_modules /app/node_modules
++COPY . .
++
++RUN npm run build
++# 此时 app/assets/builds/ 中已有编译产物
++
++# ============================================================
++# Stage 3: assets-precompile — Propshaft 指纹化
++# ============================================================
++FROM esbuild-compile AS assets-precompile
++WORKDIR /app
++
++ENV RAILS_ENV=production
++ENV RAILS_MASTER_KEY=dummy-for-precompile
++
++RUN SECRET_KEY_BASE_DUMMY=1 \
++    bundle exec rails assets:precompile
++# Propshaft 此时生成 public/assets/.manifest.json
++# 包含所有编译产物的内容摘要指纹
++
++# ============================================================
++# Stage 4: sri-lock — SRI 哈希预计算与注入
++# ============================================================
++FROM assets-precompile AS sri-lock
++WORKDIR /app
++
++# 4.1: 对本地 JS 资源: 计算 SHA-384 SRI 并写入 manifest
++RUN bundle exec ruby -e '
++  require "digest"
++  require "json"
++
++  manifest_path = "public/assets/.manifest.json"
++  manifest = JSON.parse(File.read(manifest_path))
++
++  sri_lock = {}
++  manifest.each do |logical, digested|
++    file_path = "public/assets/#{digested}"
++    next unless File.exist?(file_path) && digested.end_with?(".js")
++
++    content  = File.read(file_path)
++    sha384   = Digest::SHA384.base64digest(content)
++    sri_lock[digested] = "sha384-#{sha384}"
++  end
++
++  File.write("public/assets/.sri_manifest.json",
++             JSON.pretty_generate(sri_lock))
++  puts "SRI lock generated for #{sri_lock.size} assets"
++'
++
++# 4.2: 对 CDN 依赖: 读取 jspm.lock 中的 URL→SRI 映射
++COPY config/jspm.lock config/jspm.lock
++
++# ============================================================
++# Stage 5: production — 精简运行镜像
++# ============================================================
++FROM ruby:3.3-slim AS production
++WORKDIR /app
++
++RUN apt-get update -qq && \
++    apt-get install -y --no-install-recommends curl libvips && \
++    rm -rf /var/lib/apt/lists/*
++
++COPY --from=sri-lock /usr/local/bundle /usr/local/bundle
++COPY --from=sri-lock /app /app
++
++ENV RAILS_ENV=production
++ENV RAILS_SERVE_STATIC_FILES=true
++
++EXPOSE 3000
++CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
+diff --git a/.github/workflows/jspm-sri-lock.yml b/.github/workflows/jspm-sri-lock.yml
+new file mode 100644
+index 0000000..b2c3d4e
+--- /dev/null
++++ b/.github/workflows/jspm-sri-lock.yml
+@@ -0,0 +1,214 @@
++name: JSPM SRI Lock
++
++on:
++  push:
++    paths:
++      - "config/importmap.rb"
++  schedule:
++    - cron: "0 6 * * 1"  # 每周一 UTC 6:00 例行刷新
++  workflow_dispatch:
++
++jobs:
++  lock-jspm-dependencies:
++    runs-on: ubuntu-latest
++    timeout-minutes: 15
++
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: ruby/setup-ruby@v1
++        with:
++          ruby-version: "3.3"
++          bundler-cache: true
++
++      # -------------------------------------------------------
++      # Step 1: 解析 config/importmap.rb 中所有 CDN 依赖
++      # -------------------------------------------------------
++      - name: Extract CDN Dependencies
++        id: extract
++        run: |
++          ruby -e '
++            require "json"
++
++            importmap_rb = File.read("config/importmap.rb")
++            pins = importmap_rb.scan(
++              /pin\s+"([^"]+)"\s*,\s*to:\s*"(https?:\/\/[^"]+)"/
++            )
++
++            cdn_pins = pins.select { |_, url|
++              url.include?("cdn.jspm.io") ||
++              url.include?("ga.jspm.io") ||
++              url.include?("skypack.dev")
++            }
++
++            File.write("tmp/cdn_pins.json", JSON.pretty_generate(cdn_pins.to_h))
++            puts "Found #{cdn_pins.size} CDN dependencies"
++          '
++
++      # -------------------------------------------------------
++      # Step 2: 通过 JSPM generate API 获取权威 URL
++      # -------------------------------------------------------
++      - name: Resolve via JSPM API
++        run: |
++          ruby -e '
++            require "json"
++            require "net/http"
++            require "uri"
++
++            pins = JSON.parse(File.read("tmp/cdn_pins.json"))
++
++            packages = pins.keys
++            if packages.empty?
++              puts "No CDN packages to resolve"
++              File.write("tmp/jspm_resolved.json", "{}")
++              exit 0
++            end
++
++            uri  = URI("https://api.jspm.io/generate")
++            http = Net::HTTP.new(uri.host, uri.port)
++            http.use_ssl = true
++
++            body = {
++              "install"      => packages,
++              "flattenScope" => true,
++              "env"          => ["browser", "module", "production"],
++              "provider"     => "jspm.io"
++            }.to_json
++
++            response = http.post(uri.path, body,
++              { "Content-Type" => "application/json" })
++
++            if response.code == "200"
++              imports = JSON.parse(response.body).dig("map", "imports")
++              File.write("tmp/jspm_resolved.json",
++                JSON.pretty_generate(imports))
++              puts "Resolved #{imports.size} packages"
++
++              imports.each do |name, url|
++                puts "  #{name} => #{url}"
++              end
++            else
++              puts "JSPM API error: #{response.code} #{response.body[0..200]}"
++              exit 1
++            end
++          '
++
++      # -------------------------------------------------------
++      # Step 3: 下载每个 CDN 包并计算 SRI (SHA-384)
++      # -------------------------------------------------------
++      - name: Download & Compute SRI
++        run: |
++          ruby -e '
++            require "json"
++            require "net/http"
++            require "uri"
++            require "digest"
++            require "fileutils"
++
++            resolved = JSON.parse(File.read("tmp/jspm_resolved.json"))
++            if resolved.empty?
++              File.write("config/jspm.lock", "{}")
++              exit 0
++            end
++
++            lock = {}
++
++            resolved.each do |package, url|
++              uri  = URI(url)
++              http = Net::HTTP.new(uri.host, uri.port)
++              http.use_ssl = true
++
++              body = nil
++              3.times do |attempt|
++                begin
++                  response = http.get(uri.request_uri)
++                  if response.code == "200"
++                    body = response.body
++                    break
++                  else
++                    puts "  Retry #{attempt + 1}/3 for #{package}: HTTP #{response.code}"
++                  end
++                rescue => e
++                  puts "  Retry #{attempt + 1}/3 for #{package}: #{e.message}"
++                end
++                sleep(2)
++              end
++
++              if body.nil?
++                puts "  FAILED: #{package} from #{url}"
++                next
++              end
++
++              sha384 = Digest::SHA384.base64digest(body)
++
++              vendor_dir = "vendor/javascript/jspm"
++              FileUtils.mkdir_p(vendor_dir)
++              vendor_path = "#{vendor_dir}/#{package}.js"
++              File.write(vendor_path, body)
++
++              lock[package] = {
++                "url"       => url,
++                "integrity" => "sha384-#{sha384}",
++                "vendor"    => vendor_path,
++                "bytes"     => body.bytesize,
++                "resolved_at" => Time.now.utc.iso8601
++              }
++
++              puts "  #{package}: sha384-#{sha384[0..15]}... (#{body.bytesize}B)"
++            end
++
++            File.write("config/jspm.lock",
++              JSON.pretty_generate(lock))
++            puts "\nJSPM lock written: config/jspm.lock (#{lock.size} entries)"
++          '
++
++      # -------------------------------------------------------
++      # Step 4: 基于 lock 文件回写 config/importmap.rb
++      # -------------------------------------------------------
++      - name: Update importmap.rb with Locked URLs and SRI
++        run: |
++          ruby -e '
++            require "json"
++
++            lock = JSON.parse(File.read("config/jspm.lock"))
++            return if lock.empty?
++
++            importmap_path = "config/importmap.rb"
++            content = File.read(importmap_path)
++
++            lock.each do |package, entry|
++              url       = entry["url"]
++              integrity = entry["integrity"]
++
++              content.gsub!(
++                /pin\s+"#{Regexp.escape(package)}"\s*,\s*to:\s*"https?:\/\/[^"]+"/,
++                %(pin "#{package}", to: "#{url}")
++              )
++
++              pin_pattern = /pin\s+"#{Regexp.escape(package)}"(.*)$/
++              if content.match?(pin_pattern)
++                line = content.match(pin_pattern)[0]
++                if line.include?("integrity:")
++                  content.gsub!(
++                    /(pin\s+"#{Regexp.escape(package)}".*integrity:\s*)[^,\n]+/,
++                    %(\\1"#{integrity}")
++                  )
++                else
++                  content.gsub!(
++                    /(pin\s+"#{Regexp.escape(package)}"[^\n]*)/,
++                    %(\\1, integrity: "#{integrity}")
++                  )
++                end
++              end
++            end
++
++            File.write(importmap_path, content)
++            puts "Updated config/importmap.rb with locked URLs and SRI hashes"
++          '
++
++      # -------------------------------------------------------
++      # Step 5: 验证 — 用 lock 中的 URL 再次下载并校验 SRI
++      # -------------------------------------------------------
++      - name: Verify SRI Integrity
++        run: |
++          ruby -e '
++            require "json"
++            require "net/http"
++            require "uri"
++            require "digest"
++
++            lock = JSON.parse(File.read("config/jspm.lock"))
++            failures = []
++
++            lock.each do |package, entry|
++              url  = entry["url"]
++              expected = entry["integrity"]
++
++              uri  = URI(url)
++              http = Net::HTTP.new(uri.host, uri.port)
++              http.use_ssl = true
++
++              response = http.get(uri.request_uri)
++              if response.code != "200"
++                failures << "#{package}: HTTP #{response.code}"
++                next
++              end
++
++              actual = "sha384-#{Digest::SHA384.base64digest(response.body)}"
++              if actual != expected
++                failures << "#{package}: SRI mismatch\n  expected: #{expected}\n  actual:   #{actual}"
++              else
++                puts "  #{package}: VERIFIED"
++              end
++            end
++
++            if failures.any?
++              puts "\nSRI VERIFICATION FAILED:"
++              failures.each { |f| puts "  #{f}" }
++              exit 1
++            else
++              puts "\nAll #{lock.size} packages verified"
++            end
++          '
++
++      # -------------------------------------------------------
++      # Step 6: 提交 lock 文件变更
++      # -------------------------------------------------------
++      - name: Commit Lock File
++        if: github.event_name != 'pull_request'
++        uses: stefanzweifel/git-auto-commit-action@v5
++        with:
++          commit_message: "chore: update JSPM SRI lock [skip ci]"
++          file_pattern: "config/jspm.lock config/importmap.rb vendor/javascript/jspm/"
++          commit_user_name: "CI Bot"
++          commit_user_email: "ci@github-actions"
+diff --git a/config/initializers/importmap_sri.rb b/config/initializers/importmap_sri.rb
+new file mode 100644
+index 0000000..c3d4e5f
+--- /dev/null
++++ b/config/initializers/importmap_sri.rb
+@@ -0,0 +1,40 @@
++require "digest"
++require "json"
++
++module ImportmapSriEnhancement
++  def self.load_sri_manifest!
++    @sri_manifest ||= begin
++      path = Rails.root.join("public/assets/.sri_manifest.json")
++      if File.exist?(path)
++        JSON.parse(File.read(path))
++      else
++        {}
++      end
++    end
++  end
++
++  def sri_manifest
++    ImportmapSriEnhancement.load_sri_manifest!
++  end
++end
++
++Rails.application.config.after_initialize do
++  ImportmapSriEnhancement.load_sri_manifest!
++end
++
++Rails.application.config.after_initialize do
++  if defined?(Propshaft::Assembly)
++    Propshaft::Assembly.prepend(Module.new do
++      def integrity(path)
++        manifest = ImportmapSriEnhancement.load_sri_manifest!
++        digested = reveal(path)
++        manifest[digested] || super(path)
++      rescue => e
++        Rails.logger.warn("[SRI] fallback to runtime: #{e.message}")
++        super(path)
++      end
++    end)
++  end
++end
+diff --git a/config/initializers/jspm_lock.rb b/config/initializers/jspm_lock.rb
+new file mode 100644
+index 0000000..d4e5f6a
+--- /dev/null
++++ b/config/initializers/jspm_lock.rb
+@@ -0,0 +1,22 @@
++module JspmLock
++  LOCK_PATH = Rails.root.join("config/jspm.lock")
++
++  def self.load
++    @load ||= begin
++      if File.exist?(LOCK_PATH)
++        JSON.parse(File.read(LOCK_PATH))
++      else
++        Rails.logger.warn("[JSPM] No lock file found at #{LOCK_PATH}")
++        {}
++      end
++    end
++  end
++
++  def self.integrity_for(package)
++    entry = load[package]
++  end
++
++  def self.url_for(package)
++    entry = load[package]
++  end
++end
+diff --git a/app/controllers/application_controller.rb b/app/controllers/application_controller.rb
+index 0123456..e5f6a7b 100644
+--- a/app/controllers/application_controller.rb
++++ b/app/controllers/application_controller.rb
+@@ -1,3 +1,16 @@
+ class ApplicationController < ActionController::Base
++  etag do
++    if request.format&.html?
++      manifest_path = Rails.root.join("public/assets/.manifest.json")
++      importmap_digest = Rails.application.importmap.digest(resolver: helpers)
++
++      if File.exist?(manifest_path)
++        manifest_hash = Digest::SHA256.hexdigest(File.read(manifest_path))
++        "#{manifest_hash}:#{importmap_digest}"
++      else
++        importmap_digest
++      end
++    end
++  end
+ end
+diff --git a/config/nginx/sites-available/rails_production.conf b/config/nginx/sites-available/rails_production.conf
+new file mode 100644
+index 0000000..f6a7b8c
+--- /dev/null
++++ b/config/nginx/sites-available/rails_production.conf
+@@ -0,0 +1,164 @@
++upstream rails_app {
++    server unix:/app/tmp/sockets/puma.sock fail_timeout=0;
++}
++
++# ============================================================
++# Map 定义：按 Propshaft 指纹分发缓存策略
++# ============================================================
++map $uri $propshaft_cache_policy {
++    # Propshaft 编译产物：文件名含内容哈希，永不过期
++    ~^/assets/.*-[a-f0-9]{32,}\.(js|css|png|jpg|svg|woff2)$  "immutable";
++
++    # importmap / manifest 文件：与部署版本绑定
++    ~^/assets/\.manifest\.json$  "manifest";
++    ~^/assets/\.sri_manifest\.json$ "manifest";
++
++    # HTML 页面（内嵌 importmap）：短 TTL + ETag 驱动重验证
++    default  "dynamic";
++}
++
++map $uri $cache_ttl {
++    "immutable"  31536000;   # 1 年（内容指纹保证唯一性）
++    "manifest"   60;          # 60s，确保 CDN 快速感知部署
++    "dynamic"    0;           # 不缓存（或极短），靠 ETag 条件请求
++}
++
++# ============================================================
++# 后端: 注入 X-Asset-Manifest-Etag 响应头
++# ============================================================
++server {
++    listen 80;
++    server_name _;
++
++    root /app/public;
++
++    # --- CDN 信任代理：解读真实客户端 IP ---
++    set_real_ip_from 10.0.0.0/8;
++    set_real_ip_from 172.16.0.0/12;
++    real_ip_header    X-Forwarded-For;
++
++    # --- 静态资源：直接由 Nginx 服务 ---
++    location /assets/ {
++        # 指向 Propshaft 编译输出目录
++        alias /app/public/assets/;
++
++        # immutable 文件：强缓存 + 不验证
++        location ~ ^/assets/.*-[a-f0-9]{32,}\.(js|css|png|jpg|svg|woff2|woff|ttf|eot)$ {
++            expires max;
++            add_header Cache-Control "public, immutable, max-age=31536000";
++            add_header X-Asset-Type "immutable";
++            add_header Vary "Accept-Encoding";
++            gzip_static on;
++            brotli_static on;
++            try_files $uri =404;
++        }
++
++        # manifest 文件：缓存但允许快速更新
++        location ~ ^/assets/\..*\.json$ {
++            expires 60s;
++            add_header Cache-Control "public, max-age=60, must-revalidate";
++            add_header X-Asset-Type "manifest";
++            try_files $uri =404;
++        }
++
++        # 非指纹文件兜底
++        expires 1h;
++        add_header Cache-Control "public, max-age=3600";
++        add_header X-Asset-Type "unversioned";
++        try_files $uri =404;
++    }
++
++    # --- 动态请求：代理到 Rails ---
++    location / {
++        try_files $uri @rails;
++    }
++
++    location @rails {
++        proxy_pass http://rails_app;
++        proxy_set_header Host $host;
++        proxy_set_header X-Real-IP $remote_addr;
++        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-Proto $scheme;
++        proxy_set_header X-Request-Start "t=${msec}";
++
++        # 关键: 禁用 Nginx 自身的缓冲以确保响应流式传递
++        proxy_buffering off;
++
++        # ============================================================
++        # HTML 页面缓存策略（内嵌 importmap）
++        # 策略: 不设 max-age，完全依赖 ETag + If-None-Match
++        # 每次部署后 manifest 变更 → ETag 变 → CDN 回源
++        # ============================================================
++        proxy_cache_bypass $http_cache_control;
++
++        # Puma/Rails 在响应中已设置 ETag（importmap-rails 的 digest 机制）
++        # Nginx 原样传递，不做额外缓存
++        add_header Cache-Control "public, no-cache, must-revalidate";
++        add_header X-Deploy-Epoch "${ASSET_MANIFEST_ETAG}";
++    }
++}
++
++# ============================================================
++# CDN 前置缓存层（CloudFront / Fastly / 自建 Varnish）
++# ============================================================
++# 此段为 CDN 配置伪代码，适配常见 CDN 供应商：
++#
++# 规则 1: /assets/*-{hash32}.(js|css)
++#   Cache TTL: 365 天
++#   Cache Key: 仅 URL（hash 已区分版本）
++#
++# 规则 2: /assets/.manifest.json, /assets/.sri_manifest.json
++#   Cache TTL: 60 秒
++#   Cache Key: URL
++#   Stale-while-revalidate: 30 秒
++#
++# 规则 3: /*.html, /
++#   Cache TTL: 0（不缓存或仅用 ETag）
++#   Forward: If-None-Match, If-Modified-Since
++#   逻辑: 304 Not Modified 时由 CDN 边缘直接返回
++#
++# 规则 4: 部署后 CDN 缓存失效
++#   POST_DEPLOY: 对 /assets/.manifest.json 执行硬刷新
++#   curl -X PURGE https://cdn.example.com/assets/.manifest.json
++#
++# ============================================================
++# 三方案协同工作流
++# ============================================================
++#
++# ┌─────────────────────────────────────────────────────────────┐
++# │  CI Pipeline (GitHub Actions)                                │
++# │                                                              │
++# │  1. jspm-sri-lock.yml 运行                                  │
++# │     ├── JSPM API 解析 CDN URL                               │
++# │     ├── 下载 → vendor → SHA-384 计算                         │
++# │     ├── 回写 config/importmap.rb (URL→SRI 硬编码)            │
++# │     └── 提交 config/jspm.lock                                │
++# │                          ↓                                   │
++# │  2. Docker Build (Dockerfile 5-stage)                        │
++# │     ├── Stage 2: esbuild 编译 TS→JS                          │
++# │     ├── Stage 3: assets:precompile (Propshaft 指纹)          │
++# │     ├── Stage 4: sri-lock (SHA-384 预计算 → .sri_manifest)   │
++# │     └── Stage 5: 生产镜像 (含完整 manifest + lock)           │
++# │                          ↓                                   │
++# │  3. Deploy                                                  │
++# │     ├── Nginx 启动 (注入 ASSET_MANIFEST_ETAG)                │
++# │     ├── CDN 刷新 .manifest.json 边缘缓存                      │
++# │     └── ETag 驱动 HTML 页面 CDN 回源                         │
++# │                                                              │
++# │  结果: importmap 中的 SRI 哈希 = 实际文件 SHA-384            │
++# │        CDN 边缘节点 = 当前部署版本资产                        │
++# │        Safari SRI 校验 = 100% 通过                           │
++# └─────────────────────────────────────────────────────────────┘
