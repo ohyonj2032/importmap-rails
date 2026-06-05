@@ -135,22 +135,11 @@ class Importmap::Map
   #   # Use a custom cache key for different asset hosts
   #   packages = importmap.preloaded_module_packages(resolver: helpers, cache_key: "cdn_host")
   def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages)
+    packages = expanded_preloading_packages_and_directories(entry_point:)
+    return build_preloaded_module_packages(packages, resolver: resolver) if fresh_asset_resolution?(resolver)
+
     cache_as(cache_key) do
-      expanded_preloading_packages_and_directories(entry_point:).filter_map do |_, package|
-        resolved_path = resolve_asset_path(package.path, resolver: resolver)
-        next unless resolved_path
-
-        resolved_integrity = resolve_integrity_value(package.integrity, package.path, resolver: resolver)
-
-        package = MappedFile.new(
-          name: package.name,
-          path: package.path,
-          preload: package.preload,
-          integrity: resolved_integrity
-        )
-
-        [resolved_path, package]
-      end.to_h
+      build_preloaded_module_packages(packages, resolver: resolver)
     end
   end
 
@@ -160,10 +149,11 @@ class Importmap::Map
   # want these resolved paths to use. In case you need to resolve for different asset hosts, you can pass in a custom
   # `cache_key` to vary the cache used by this method for the different cases.
   def to_json(resolver:, cache_key: :json)
+    packages = expanded_packages_and_directories
+    return JSON.pretty_generate(build_import_map(packages, resolver: resolver)) if fresh_asset_resolution?(resolver)
+
     cache_as(cache_key) do
-      packages = expanded_packages_and_directories
-      map = build_import_map(packages, resolver: resolver)
-      JSON.pretty_generate(map)
+      JSON.pretty_generate(build_import_map(packages, resolver: resolver))
     end
   end
 
@@ -211,6 +201,28 @@ class Importmap::Map
 
     def rescuable_asset_error?(error)
       Rails.application.config.importmap.rescuable_asset_errors.any? { |e| error.is_a?(e) }
+    end
+
+    def build_preloaded_module_packages(packages, resolver:)
+      packages.filter_map do |_, package|
+        resolved_path = resolve_asset_path(package.path, resolver: resolver)
+        next unless resolved_path
+
+        resolved_integrity = resolve_integrity_value(package.integrity, package.path, resolver: resolver)
+
+        package = MappedFile.new(
+          name: package.name,
+          path: package.path,
+          preload: package.preload,
+          integrity: resolved_integrity
+        )
+
+        [resolved_path, package]
+      end.to_h
+    end
+
+    def fresh_asset_resolution?(resolver)
+      Rails.application.config.importmap.sweep_cache || resolver.respond_to?(:asset_integrity)
     end
 
     def resolve_asset_paths(paths, resolver:)
@@ -292,14 +304,6 @@ class Importmap::Map
     end
 
     def module_name_from(filename, mapping)
-      # Regex explanation:
-      # (?:\/|^) # Matches either / OR the start of the string
-      # index   # Matches the word index
-      # $       # Matches the end of the string
-      #
-      # Sample matches
-      # index
-      # folder/index
       index_regex = /(?:\/|^)index$/
 
       [ mapping.under, filename.to_s.chomp(filename.extname).remove(index_regex).presence ].compact.join("/")

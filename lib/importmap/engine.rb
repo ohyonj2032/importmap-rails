@@ -30,9 +30,16 @@ module Importmap
     end
 
     initializer "importmap.cache_sweeper" do |app|
-      if app.config.importmap.sweep_cache && !app.config.cache_classes
+      if app.config.importmap.sweep_cache
         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+
+        if defined?(Propshaft)
+          propshaft_assets_path = app.root.join("public/assets")
+          app.config.importmap.cache_sweepers << propshaft_assets_path if propshaft_assets_path.exist?
+        end
+
+        app.config.importmap.cache_sweepers.uniq!
         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
 
         ActiveSupport.on_load(:action_controller_base) do

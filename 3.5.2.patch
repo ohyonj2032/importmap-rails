@@ -1,0 +1,307 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..a6a93cb 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,24 +1,28 @@
+ module Importmap::ImportmapTagsHelper
+   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
++  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, shim: false)
++    importmap_json = importmap.to_json(resolver: self)
++
+     safe_join [
+-      javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
++      javascript_inline_importmap_tag(importmap_json, shim: shim),
+       javascript_importmap_module_preload_tags(importmap, entry_point:),
+-      javascript_import_module_tag(entry_point)
++      javascript_import_module_tag(entry_point, shim: shim)
+     ], "\n"
+   end
+ 
+   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+-  def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
++  def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self), shim: false)
+     tag.script importmap_json.html_safe,
+-      type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
++      type: shim ? "importmap-shim" : "importmap",
++      "data-turbo-track": "reload",
++      nonce: request&.content_security_policy_nonce
+   end
+ 
+   # Import a named JavaScript module(s) using a script-module tag.
+-  def javascript_import_module_tag(*module_names)
++  def javascript_import_module_tag(*module_names, shim: false)
+     imports = Array(module_names).collect { |m| %(import "#{m}") }.join("\n")
+-    tag.script imports.html_safe, type: "module", nonce: request&.content_security_policy_nonce
++    tag.script imports.html_safe, type: shim ? "module-shim" : "module", nonce: request&.content_security_policy_nonce
+   end
+ 
+   # Link tags for preloading all modules marked as preload: true in the `importmap`
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..8c1ba9f 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -30,9 +30,16 @@ module Importmap
+     end
+ 
+     initializer "importmap.cache_sweeper" do |app|
+-      if app.config.importmap.sweep_cache && !app.config.cache_classes
++      if app.config.importmap.sweep_cache
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
++
++        if defined?(Propshaft)
++          propshaft_assets_path = app.root.join("public/assets")
++          app.config.importmap.cache_sweepers << propshaft_assets_path if propshaft_assets_path.exist?
++        end
++
++        app.config.importmap.cache_sweepers.uniq!
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..e5356e3 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -135,22 +135,11 @@ class Importmap::Map
+   #   # Use a custom cache key for different asset hosts
+   #   packages = importmap.preloaded_module_packages(resolver: helpers, cache_key: "cdn_host")
+   def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages)
+-    cache_as(cache_key) do
+-      expanded_preloading_packages_and_directories(entry_point:).filter_map do |_, package|
+-        resolved_path = resolve_asset_path(package.path, resolver: resolver)
+-        next unless resolved_path
+-
+-        resolved_integrity = resolve_integrity_value(package.integrity, package.path, resolver: resolver)
++    packages = expanded_preloading_packages_and_directories(entry_point:)
++    return build_preloaded_module_packages(packages, resolver: resolver) if fresh_asset_resolution?(resolver)
+ 
+-        package = MappedFile.new(
+-          name: package.name,
+-          path: package.path,
+-          preload: package.preload,
+-          integrity: resolved_integrity
+-        )
+-
+-        [resolved_path, package]
+-      end.to_h
++    cache_as(cache_key) do
++      build_preloaded_module_packages(packages, resolver: resolver)
+     end
+   end
+ 
+@@ -160,10 +149,11 @@ class Importmap::Map
+   # want these resolved paths to use. In case you need to resolve for different asset hosts, you can pass in a custom
+   # `cache_key` to vary the cache used by this method for the different cases.
+   def to_json(resolver:, cache_key: :json)
++    packages = expanded_packages_and_directories
++    return JSON.pretty_generate(build_import_map(packages, resolver: resolver)) if fresh_asset_resolution?(resolver)
++
+     cache_as(cache_key) do
+-      packages = expanded_packages_and_directories
+-      map = build_import_map(packages, resolver: resolver)
+-      JSON.pretty_generate(map)
++      JSON.pretty_generate(build_import_map(packages, resolver: resolver))
+     end
+   end
+ 
+@@ -213,6 +203,28 @@ class Importmap::Map
+       Rails.application.config.importmap.rescuable_asset_errors.any? { |e| error.is_a?(e) }
+     end
+ 
++    def build_preloaded_module_packages(packages, resolver:)
++      packages.filter_map do |_, package|
++        resolved_path = resolve_asset_path(package.path, resolver: resolver)
++        next unless resolved_path
++
++        resolved_integrity = resolve_integrity_value(package.integrity, package.path, resolver: resolver)
++
++        package = MappedFile.new(
++          name: package.name,
++          path: package.path,
++          preload: package.preload,
++          integrity: resolved_integrity
++        )
++
++        [resolved_path, package]
++      end.to_h
++    end
++
++    def fresh_asset_resolution?(resolver)
++      Rails.application.config.importmap.sweep_cache || resolver.respond_to?(:asset_integrity)
++    end
++
+     def resolve_asset_paths(paths, resolver:)
+       paths.transform_values do |mapping|
+         resolve_asset_path(mapping.path, resolver:)
+@@ -292,14 +304,6 @@ class Importmap::Map
+     end
+ 
+     def module_name_from(filename, mapping)
+-      # Regex explanation:
+-      # (?:\/|^) # Matches either / OR the start of the string
+-      # index   # Matches the word index
+-      # $       # Matches the end of the string
+-      #
+-      # Sample matches
+-      # index
+-      # folder/index
+       index_regex = /(?:\/|^)index$/
+ 
+       [ mapping.under, filename.to_s.chomp(filename.extname).remove(index_regex).presence ].compact.join("/")
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..e99c149 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,6 +7,8 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js" data-turbo-track="reload"></script>
++    <%= javascript_importmap_tags shim: true %>
+   </head>
+ 
+   <body>
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..d44abfe 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -1,118 +1,35 @@
+ require "active_support/core_ext/integer/time"
+ 
+ Rails.application.configure do
+-  # Settings specified here will take precedence over those in config/application.rb.
+-
+-  # Code is not reloaded between requests.
+   config.cache_classes = true
+-
+-  # Eager load code on boot. This eager loads most of Rails and
+-  # your application in memory, allowing both threaded web servers
+-  # and those relying on copy on write to perform better.
+-  # Rake tasks automatically ignore this option for performance.
+   config.eager_load = true
+ 
+-  # Full error reports are disabled and caching is turned on.
+   config.consider_all_requests_local       = false
+   config.action_controller.perform_caching = true
+ 
+-  # Ensures that a master key has been made available in either ENV["RAILS_MASTER_KEY"]
+-  # or in config/master.key. This key is used to decrypt credentials (and other encrypted files).
+-  # config.require_master_key = true
+-
+-  # Disable serving static files from the `/public` folder by default since
+-  # Apache or NGINX already handles this.
+   config.public_file_server.enabled = ENV['RAILS_SERVE_STATIC_FILES'].present?
+ 
+-  # Compress CSS using a preprocessor.
+-  # config.assets.css_compressor = :sass
+-
+-  # Do not fallback to assets pipeline if a precompiled asset is missed.
+   config.assets.compile = false
++  config.importmap.sweep_cache = true
+ 
+-  # Enable serving of images, stylesheets, and JavaScripts from an asset server.
+-  # config.asset_host = 'http://assets.example.com'
+-
+-  # Specifies the header that your server uses for sending files.
+-  # config.action_dispatch.x_sendfile_header = 'X-Sendfile' # for Apache
+-  # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
+-
+-  # Store uploaded files on the local file system (see config/storage.yml for options).
+   config.active_storage.service = :local
+ 
+-  # Mount Action Cable outside main process or domain.
+-  # config.action_cable.mount_path = nil
+-  # config.action_cable.url = 'wss://example.com/cable'
+-  # config.action_cable.allowed_request_origins = [ 'http://example.com', /http:\/\/example.*/ ]
+-
+-  # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
+-  # config.force_ssl = true
+-
+-  # Include generic and useful information about system operation, but avoid logging too much
+-  # information to avoid inadvertent exposure of personally identifiable information (PII).
+   config.log_level = :info
+-
+-  # Prepend all log lines with the following tags.
+   config.log_tags = [ :request_id ]
+ 
+-  # Use a different cache store in production.
+-  # config.cache_store = :mem_cache_store
+-
+-  # Use a real queuing backend for Active Job (and separate queues per environment).
+-  # config.active_job.queue_adapter     = :resque
+-  # config.active_job.queue_name_prefix = "dummy_production"
+-
+-  # Ignore bad email addresses and do not raise email delivery errors.
+-  # Set this to true and configure the email server for immediate delivery to raise delivery errors.
+-  # config.action_mailer.raise_delivery_errors = false
+-
+-  # Enable locale fallbacks for I18n (makes lookups for any locale fall back to
+-  # the I18n.default_locale when a translation cannot be found).
+   config.i18n.fallbacks = true
+ 
+-  # Send deprecation notices to registered listeners.
+   config.active_support.deprecation = :notify
+-
+-  # Log disallowed deprecations.
+   config.active_support.disallowed_deprecation = :log
+-
+-  # Tell Active Support which deprecation messages to disallow.
+   config.active_support.disallowed_deprecation_warnings = []
+ 
+-  # Use default logging formatter so that PID and timestamp are not suppressed.
+   config.log_formatter = ::Logger::Formatter.new
+ 
+-  # Use a different logger for distributed setups.
+-  # require "syslog/logger"
+-  # config.logger = ActiveSupport::TaggedLogging.new(Syslog::Logger.new 'app-name')
+-
+   if ENV["RAILS_LOG_TO_STDOUT"].present?
+     logger           = ActiveSupport::Logger.new(STDOUT)
+     logger.formatter = config.log_formatter
+     config.logger    = ActiveSupport::TaggedLogging.new(logger)
+   end
+ 
+-  # Do not dump schema after migrations.
+   config.active_record.dump_schema_after_migration = false
+-
+-  # Inserts middleware to perform automatic connection switching.
+-  # The `database_selector` hash is used to pass options to the DatabaseSelector
+-  # middleware. The `delay` is used to determine how long to wait after a write
+-  # to send a subsequent read to the primary.
+-  #
+-  # The `database_resolver` class is used by the middleware to determine which
+-  # database is appropriate to use based on the time delay.
+-  #
+-  # The `database_resolver_context` class is used by the middleware to set
+-  # timestamps for the last write to the primary. The resolver uses the context
+-  # class timestamps to determine how long to wait before reading from the
+-  # replica.
+-  #
+-  # By default Rails will store a last write timestamp in the session. The
+-  # DatabaseSelector middleware is designed as such you can define your own
+-  # strategy for connection switching and pass that into the middleware through
+-  # these configuration options.
+-  # config.active_record.database_selector = { delay: 2.seconds }
+-  # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+-  # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+ end
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..0186420 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -49,6 +49,13 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+     )
+   end
+ 
++  test "javascript_importmap_tags can emit shim tags" do
++    tags = javascript_importmap_tags("application", shim: true)
++
++    assert_includes tags, %{<script type="importmap-shim" data-turbo-track="reload">}
++    assert_includes tags, %{<script type="module-shim">import "application"</script>}
++  end
++
+   test "tags have no nonce if CSP is not configured" do
+     @request = FakeRequest.new
+ 

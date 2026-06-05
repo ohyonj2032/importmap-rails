@@ -49,6 +49,13 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     )
   end
 
+  test "javascript_importmap_tags can emit shim tags" do
+    tags = javascript_importmap_tags("application", shim: true)
+
+    assert_includes tags, %{<script type="importmap-shim" data-turbo-track="reload">}
+    assert_includes tags, %{<script type="module-shim">import "application"</script>}
+  end
+
   test "tags have no nonce if CSP is not configured" do
     @request = FakeRequest.new
 
