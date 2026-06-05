@@ -25,7 +25,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
       <script type="importmap" data-turbo-track="reload">
         {
           "imports": {
-            "md5": "https://cdn.skypack.dev/md5",
+            "md5": "https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js",
             "not_there": "/nowhere.js",
             "rich_text": "/rich_text.js"
           },
@@ -42,7 +42,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
   test "javascript_importmap_module_preload_tags" do
     assert_dom_equal(
       %(
-        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
+        <link rel="modulepreload" href="https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js">
         <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
       ),
       javascript_importmap_module_preload_tags

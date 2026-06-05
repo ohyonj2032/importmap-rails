@@ -33,6 +33,17 @@ Rails.application.configure do
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
   # config.asset_host = 'http://assets.example.com'
 
+  # Asset cache control: fingerprint-based assets (importmap modules, Propshaft digests)
+  # are immutable and cached for 1 year. Non-fingerprinted assets use shorter TTL.
+  config.public_file_server.headers = {
+    "Cache-Control" => "public, max-age=31536000, immutable"
+  }
+
+  if defined?(Propshaft)
+    config.assets.cache_digests = true
+    config.assets.digest = true
+  end
+
   # Specifies the header that your server uses for sending files.
   # config.action_dispatch.x_sendfile_header = 'X-Sendfile' # for Apache
   # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX

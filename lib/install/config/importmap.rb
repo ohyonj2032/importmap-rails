@@ -1,3 +1,3 @@
-# Pin npm packages by running ./bin/importmap
+enable_integrity!
 
 pin "application"
