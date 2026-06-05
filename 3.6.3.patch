@@ -1,0 +1,128 @@
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,32 @@
++# ==========================================
++# Stage 1: Node.js 编译前端资源 (esbuild)
++# ==========================================
++FROM node:18-alpine AS frontend-builder
++WORKDIR /app
++COPY package.json yarn.lock ./
++RUN yarn install --frozen-lockfile
++COPY app/javascript ./app/javascript
++COPY tsconfig.json ./ 
++RUN yarn build
++
++# ==========================================
++# Stage 2: Ruby 环境与资产预编译 (Propshaft)
++# ==========================================
++FROM ruby:3.2-alpine AS assets-builder
++WORKDIR /app
++RUN apk add --no-cache build-base git nodejs tzdata
++COPY Gemfile Gemfile.lock ./
++RUN bundle install --without development test
++COPY . .
++COPY --from=frontend-builder /app/app/assets/builds ./app/assets/builds
++RUN SECRET_KEY_BASE_DUMMY=1 bundle exec rails assets:precompile
++
++# ==========================================
++# Stage 3: 最终生产镜像
++# ==========================================
++FROM ruby:3.2-alpine AS production
++WORKDIR /app
++RUN apk add --no-cache tzdata postgresql-client vips
++COPY --from=assets-builder /usr/local/bundle /usr/local/bundle
++COPY --from=assets-builder /app /app
++ENV RAILS_ENV="production"
++ENV RAILS_SERVE_STATIC_FILES="true"
++EXPOSE 3000
++CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/.github/workflows/build.yml
+@@ -0,0 +1,19 @@
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++      - name: Checkout code
++        uses: actions/checkout@v4
++
++      - name: Set up Ruby
++        uses: ruby/setup-ruby@v1
++        with:
++          ruby-version: '3.2'
++          bundler-cache: true
++
++      - name: Lock Importmap Dependencies and Precompute SRI
++        run: |
++          ruby scripts/lock_importmap_sri.rb
++          git diff config/importmap.rb
++
++      - name: Build and push Docker image
++        run: docker build -t my-rails-app .
+diff --git a/scripts/lock_importmap_sri.rb b/scripts/lock_importmap_sri.rb
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/scripts/lock_importmap_sri.rb
+@@ -0,0 +1,22 @@
++require 'net/http'
++require 'openssl'
++require 'uri'
++
++importmap_path = 'config/importmap.rb'
++content = File.read(importmap_path)
++
++locked_content = content.gsub(/pin\s+['"]([^'"]+)['"]\s*,\s*to:\s*['"](https:\/\/(?:cdn\.jspm\.io|ga\.jspm\.io)[^'"]+)['"](?!.*integrity)/) do |match|
++  pkg, url = $1, $2
++  uri = URI(url)
++  
++  response = Net::HTTP.get_response(uri)
++  final_url = response.is_a?(Net::HTTPRedirection) ? response['location'] : url
++  
++  body = Net::HTTP.get(URI(final_url))
++  hash = "sha384-#{[OpenSSL::Digest::SHA384.digest(body)].pack('m0').strip}"
++  
++  puts "Locked #{pkg} -> #{final_url} (#{hash})"
++  "pin \"#{pkg}\", to: \"#{final_url}\", integrity: \"#{hash}\""
++end
++
++File.write(importmap_path, locked_content)
+diff --git a/config/nginx.conf b/config/nginx.conf
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/config/nginx.conf
+@@ -0,0 +1,24 @@
++server {
++    listen 80;
++    server_name example.com;
++    root /app/public;
++
++    location ~* \.(?:html|json)$ {
++        add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" always;
++        add_header Pragma "no-cache" always;
++        expires 0;
++        try_files $uri @rails;
++    }
++
++    location ^~ /assets/ {
++        gzip_static on;
++        add_header Cache-Control "public, max-age=31536000, immutable" always;
++        add_header Access-Control-Allow-Origin "*" always;
++        add_header Access-Control-Allow-Methods "GET, OPTIONS" always;
++        try_files $uri =404;
++    }
++
++    location @rails {
++        proxy_pass http://localhost:3000;
++        proxy_set_header Host $http_host;
++        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++        proxy_set_header X-Forwarded-Proto $scheme;
++    }
++}
