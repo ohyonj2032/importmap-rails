@@ -13,6 +13,7 @@ class Importmap::Map
 
   def initialize
     @integrity = false
+    @integrity_override = nil
     @packages, @directories = {}, {}
     @cache = {}
   end
@@ -67,6 +68,22 @@ class Importmap::Map
   def enable_integrity!
     clear_cache
     @integrity = true
+  end
+
+  # Overrides the integrity setting. Useful for testing environments
+  # where SRI may not be available or desirable.
+  def integrity=(value)
+    clear_cache
+    @integrity_override = value
+  end
+
+  # Returns whether integrity is currently enabled, considering any overrides
+  def integrity_enabled?
+    if @integrity_override.nil?
+      @integrity
+    else
+      @integrity_override
+    end
   end
 
   def pin(name, to: nil, preload: true, integrity: true)
@@ -179,6 +196,11 @@ class Importmap::Map
     Digest::SHA1.hexdigest(to_json(resolver: resolver).to_s)
   end
 
+  # Clears the internal cache, forcing regeneration of importmap JSON and preload paths
+  def clear_cache
+    @cache.clear
+  end
+
   # Returns an instance of ActiveSupport::EventedFileUpdateChecker configured to clear the cache of the map
   # when the directories passed on initialization via `watches:` have changes. This is used in development
   # and test to ensure the map caches are reset when javascript files are changed.
@@ -203,10 +225,6 @@ class Importmap::Map
       else
         @cache[name.to_s] = yield
       end
-    end
-
-    def clear_cache
-      @cache.clear
     end
 
     def rescuable_asset_error?(error)
@@ -254,7 +272,7 @@ class Importmap::Map
     end
 
     def resolve_integrity_value(integrity, path, resolver:)
-      return unless @integrity
+      return unless integrity_enabled?
 
       case integrity
       when true

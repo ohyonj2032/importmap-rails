@@ -17,6 +17,11 @@ module Importmap
       app.importmap = Importmap::Map.new
       app.config.importmap.paths << app.root.join("config/importmap.rb")
       app.config.importmap.paths.each { |path| app.importmap.draw(path) }
+      
+      # Disable SRI in test environment by default for stability
+      if Rails.env.test?
+        app.importmap.integrity = false
+      end
     end
 
     initializer "importmap.reloader" do |app|
@@ -33,10 +38,22 @@ module Importmap
       if app.config.importmap.sweep_cache && !app.config.cache_classes
         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+        app.config.importmap.cache_sweepers << app.root.join("app/assets/javascripts") if defined?(Propshaft)
         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
 
         ActiveSupport.on_load(:action_controller_base) do
           before_action { Rails.application.importmap.cache_sweeper.execute_if_updated }
+        end
+      end
+    end
+
+    initializer "importmap.propshaft_integration" do |app|
+      if defined?(Propshaft)
+        ActiveSupport.on_load(:propshaft) do
+          # Hook into Propshaft asset change events to clear importmap cache
+          Propshaft::Compiler.after_compile do
+            Rails.application.importmap.clear_cache
+          end
         end
       end
     end

@@ -1,0 +1,136 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..301d5d5 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,13 +1,21 @@
+ module Importmap::ImportmapTagsHelper
+   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
++  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, shim_url: nil)
+     safe_join [
++      javascript_es_module_shim_tag(shim_url),
+       javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
+       javascript_importmap_module_preload_tags(importmap, entry_point:),
+       javascript_import_module_tag(entry_point)
+     ], "\n"
+   end
+ 
++  # Generate the es-module-shim script tag to ensure import maps work consistently across all browsers,
++  # particularly fixing dynamic import scope issues in older Safari versions.
++  def javascript_es_module_shim_tag(shim_url = nil)
++    url = shim_url || "https://ga.jspm.io/npm:es-module-shims@1.8.0/dist/es-module-shims.js"
++    tag.script nil, src: url, async: true, nonce: request&.content_security_policy_nonce
++  end
++
+   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+   def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..f347c50 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -17,6 +17,11 @@ module Importmap
+       app.importmap = Importmap::Map.new
+       app.config.importmap.paths << app.root.join("config/importmap.rb")
+       app.config.importmap.paths.each { |path| app.importmap.draw(path) }
++      
++      # Disable SRI in test environment by default for stability
++      if Rails.env.test?
++        app.importmap.integrity = false
++      end
+     end
+ 
+     initializer "importmap.reloader" do |app|
+@@ -33,6 +38,7 @@ module Importmap
+       if app.config.importmap.sweep_cache && !app.config.cache_classes
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
++        app.config.importmap.cache_sweepers << app.root.join("app/assets/javascripts") if defined?(Propshaft)
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+@@ -41,6 +47,17 @@ module Importmap
+       end
+     end
+ 
++    initializer "importmap.propshaft_integration" do |app|
++      if defined?(Propshaft)
++        ActiveSupport.on_load(:propshaft) do
++          # Hook into Propshaft asset change events to clear importmap cache
++          Propshaft::Compiler.after_compile do
++            Rails.application.importmap.clear_cache
++          end
++        end
++      end
++    end
++
+     initializer "importmap.assets" do |app|
+       if app.config.respond_to?(:assets)
+         app.config.assets.paths << Rails.root.join("app/javascript")
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..cc637ee 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -13,6 +13,7 @@ class Importmap::Map
+ 
+   def initialize
+     @integrity = false
++    @integrity_override = nil
+     @packages, @directories = {}, {}
+     @cache = {}
+   end
+@@ -69,6 +70,22 @@ class Importmap::Map
+     @integrity = true
+   end
+ 
++  # Overrides the integrity setting. Useful for testing environments
++  # where SRI may not be available or desirable.
++  def integrity=(value)
++    clear_cache
++    @integrity_override = value
++  end
++
++  # Returns whether integrity is currently enabled, considering any overrides
++  def integrity_enabled?
++    if @integrity_override.nil?
++      @integrity
++    else
++      @integrity_override
++    end
++  end
++
+   def pin(name, to: nil, preload: true, integrity: true)
+     clear_cache
+     @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
+@@ -179,6 +196,11 @@ class Importmap::Map
+     Digest::SHA1.hexdigest(to_json(resolver: resolver).to_s)
+   end
+ 
++  # Clears the internal cache, forcing regeneration of importmap JSON and preload paths
++  def clear_cache
++    @cache.clear
++  end
++
+   # Returns an instance of ActiveSupport::EventedFileUpdateChecker configured to clear the cache of the map
+   # when the directories passed on initialization via `watches:` have changes. This is used in development
+   # and test to ensure the map caches are reset when javascript files are changed.
+@@ -205,10 +227,6 @@ class Importmap::Map
+       end
+     end
+ 
+-    def clear_cache
+-      @cache.clear
+-    end
+-
+     def rescuable_asset_error?(error)
+       Rails.application.config.importmap.rescuable_asset_errors.any? { |e| error.is_a?(e) }
+     end
+@@ -254,7 +272,7 @@ class Importmap::Map
+     end
+ 
+     def resolve_integrity_value(integrity, path, resolver:)
+-      return unless @integrity
++      return unless integrity_enabled?
+ 
+       case integrity
+       when true

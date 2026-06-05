@@ -1,11 +1,19 @@
 module Importmap::ImportmapTagsHelper
   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
+  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, shim_url: nil)
     safe_join [
+      javascript_es_module_shim_tag(shim_url),
       javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
       javascript_importmap_module_preload_tags(importmap, entry_point:),
       javascript_import_module_tag(entry_point)
     ], "\n"
+  end
+
+  # Generate the es-module-shim script tag to ensure import maps work consistently across all browsers,
+  # particularly fixing dynamic import scope issues in older Safari versions.
+  def javascript_es_module_shim_tag(shim_url = nil)
+    url = shim_url || "https://ga.jspm.io/npm:es-module-shims@1.8.0/dist/es-module-shims.js"
+    tag.script nil, src: url, async: true, nonce: request&.content_security_policy_nonce
   end
 
   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
