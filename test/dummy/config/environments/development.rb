@@ -27,8 +27,11 @@ Rails.application.configure do
   config.active_support.disallowed_deprecation_warnings = []
   config.active_record.migration_error = :page_load
   config.active_record.verbose_query_logs = true
-  config.assets.debug = true
-  config.assets.quiet = true
+
+  if config.respond_to?(:assets)
+    config.assets.debug = true if config.assets.respond_to?(:debug=)
+    config.assets.quiet = true if config.assets.respond_to?(:quiet=)
+  end
 
   if config.respond_to?(:action_view) && config.action_view.respond_to?(:preload_links_header=)
     config.action_view.preload_links_header = true

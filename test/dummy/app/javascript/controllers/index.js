@@ -1,7 +1,16 @@
 import { application } from "controllers/application"
-import GoodbyeController from "controllers/goodbye_controller"
+import { eagerLoadControllersFrom } from "@hotwired/stimulus-loading"
 
-export function loadControllers(stimulus = application) {
-  stimulus.register("goodbye", GoodbyeController)
+let controllersLoaded = false
+
+function loadControllers(stimulus = application) {
+  if (controllersLoaded) {
+    return stimulus
+  }
+
+  eagerLoadControllersFrom("controllers", stimulus)
+  controllersLoaded = true
   return stimulus
 }
+
+export { application, loadControllers }

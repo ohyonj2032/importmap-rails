@@ -1,33 +1,33 @@
-function nonceMeta() {
-  return document.head.querySelector("meta[name='csp-nonce']")
+const AUTO_NONCE_SELECTOR = "script[data-auto-nonce]:not([nonce]), style:not([nonce])"
+
+function currentCspNonce() {
+  return document.querySelector('meta[name="csp-nonce"]')?.content || document.querySelector("script[nonce]")?.nonce || ""
 }
 
-export function currentCspNonce() {
-  return nonceMeta()?.content || ""
-}
-
-export function applyNonce(element) {
-  if (!(element instanceof Element)) {
+function applyCspNonce(element, nonce = currentCspNonce()) {
+  if (!element || !nonce || !element.matches) {
     return element
   }
 
-  if (!element.matches("script, style")) {
+  const eligible = element.matches("style:not([nonce]), script[data-auto-nonce]:not([nonce])")
+
+  if (!eligible) {
     return element
   }
 
-  const nonce = currentCspNonce()
-
-  if (nonce && !element.nonce) {
-    element.nonce = nonce
-  }
-
+  element.setAttribute("nonce", nonce)
+  element.nonce = nonce
   return element
 }
 
-export function observeDynamicElements() {
-  if (!("MutationObserver" in window)) {
+function observeDynamicElements(root = document.documentElement) {
+  const nonce = currentCspNonce()
+
+  if (!root || !nonce || !("MutationObserver" in window)) {
     return null
   }
+
+  root.querySelectorAll?.(AUTO_NONCE_SELECTOR).forEach((element) => applyCspNonce(element, nonce))
 
   const observer = new MutationObserver((mutations) => {
     mutations.forEach(({ addedNodes }) => {
@@ -36,16 +36,21 @@ export function observeDynamicElements() {
           return
         }
 
-        applyNonce(node)
-        node.querySelectorAll("script, style").forEach((child) => applyNonce(child))
+        if (node.matches(AUTO_NONCE_SELECTOR)) {
+          applyCspNonce(node, nonce)
+        }
+
+        node.querySelectorAll?.(AUTO_NONCE_SELECTOR).forEach((element) => applyCspNonce(element, nonce))
       })
     })
   })
 
-  observer.observe(document.documentElement, { childList: true, subtree: true })
+  observer.observe(root, { childList: true, subtree: true })
   return observer
 }
 
-export function supportsImportMaps() {
-  return HTMLScriptElement.supports?.("importmap") || false
+function supportsImportMaps() {
+  return typeof HTMLScriptElement !== "undefined" && typeof HTMLScriptElement.supports === "function" && HTMLScriptElement.supports("importmap")
 }
+
+export { applyCspNonce, currentCspNonce, observeDynamicElements, supportsImportMaps }

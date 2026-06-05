@@ -7,8 +7,9 @@ export default class extends Controller {
   connect() {
     this.notificationHandler = this.handleNotification.bind(this)
     document.addEventListener("importmap:notifications:received", this.notificationHandler)
+
     this.render({
-      type: "connected",
+      type: document.documentElement.dataset.cableState || "connecting",
       message: "Stimulus controller connected",
       timestamp: dayjs().toISOString()
     })
@@ -20,10 +21,9 @@ export default class extends Controller {
 
   ping() {
     document.dispatchEvent(
-      new CustomEvent("importmap:notifications:received", {
+      new CustomEvent("importmap:notifications:ping", {
         detail: {
-          type: "manual",
-          message: `Manual refresh ${this.element.id || "goodbye"}`,
+          message: `Manual refresh ${this.element.id || "importmap-demo"}`,
           timestamp: dayjs().toISOString()
         }
       })

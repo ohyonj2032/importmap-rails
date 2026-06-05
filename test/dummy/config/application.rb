@@ -10,9 +10,6 @@ require "action_cable/engine"
 begin
   require "sprockets/railtie"
 rescue LoadError
-  # This is safe to ignore: it's expected that sprockets-rails won't be
-  # available when we're testing against an application that uses rails 7 with
-  # an alternative asset pipeline (e.g. propshaft).
 end
 require "active_storage/engine"
 

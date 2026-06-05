@@ -1,0 +1,7 @@
+<main id="importmap-demo" data-controller="goodbye">
+  <h1>Importmap Rails Demo</h1>
+  <p>Environment: <strong><%= Rails.env %></strong></p>
+  <p>Connection state: <span data-goodbye-target="status">booting</span></p>
+  <p data-goodbye-target="message">Waiting for importmap boot sequence</p>
+  <button type="button" data-action="goodbye#ping">Send test event</button>
+</main>

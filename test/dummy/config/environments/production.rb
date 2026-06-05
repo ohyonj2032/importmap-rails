@@ -10,7 +10,11 @@ Rails.application.configure do
   config.public_file_server.headers = {
     "Cache-Control" => "public, max-age=#{1.year.to_i}, immutable"
   }
-  config.assets.compile = false
+
+  if config.respond_to?(:assets) && config.assets.respond_to?(:compile=)
+    config.assets.compile = false
+  end
+
   config.active_storage.service = :local
   config.log_level = :info
   config.log_tags = [:request_id]
