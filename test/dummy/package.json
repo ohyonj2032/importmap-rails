@@ -1,0 +1,14 @@
+{
+  "name": "importmap-rails-dummy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:ts": "node esbuild.config.mjs",
+    "build:ts:watch": "node esbuild.config.mjs --watch",
+    "runtime:map": "node scripts/generate_runtime_importmap.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.5",
+    "typescript": "^5.8.3"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "imports": {
+    "react-data-grid": "https://ga.jspm.io/npm:react-data-grid@7.0.0-beta.30/lib/bundle.js"
+  },
+  "scopes": {
+    "https://ga.jspm.io/": {
+      "clsx": "https://ga.jspm.io/npm:clsx@1.2.1/dist/clsx.m.js",
+      "react": "https://ga.jspm.io/npm:react@18.3.1/index.js",
+      "react-dom": "https://ga.jspm.io/npm:react-dom@18.3.1/index.js",
+      "react/jsx-runtime": "https://ga.jspm.io/npm:react@18.3.1/jsx-runtime.js",
+      "scheduler": "https://ga.jspm.io/npm:scheduler@0.23.2/index.js"
+    }
+  },
+  "integrity": {
+    "https://ga.jspm.io/npm:clsx@1.2.1/dist/clsx.m.js": "sha384-DMYdK2+TpaT6DMbcA/4oilOEGTnMtsLe7JtnCc9r1JDw27Wa7Lq+nyixmwTuf3JN",
+    "https://ga.jspm.io/npm:react-data-grid@7.0.0-beta.30/lib/bundle.js": "sha384-ZZHexogxMJy0rh3x6Sr+NgONXeGdGo40bAEkGdb0YzWgC+sHE18pSRl99TCIa2Ej",
+    "https://ga.jspm.io/npm:react-dom@18.3.1/index.js": "sha384-XojaeDrcN2BUNMWBZXXH8PN4AdSGLtwzkxjVfaMTERy0nqLpFABCOuB/OYoHCtkG",
+    "https://ga.jspm.io/npm:react@18.3.1/index.js": "sha384-c6UhqeUfPLmxJ9XAAMY5fAH9JekaXKoqM6eN4eg6sHFhkEwNTxmxrgng7f4JMr/K",
+    "https://ga.jspm.io/npm:react@18.3.1/jsx-runtime.js": "sha384-3ffpy/fIFD8+hHVUaGGD/K14bYc6KVcI72fCHA+nhcuftW1yeQm/7pT0xjpwhDps",
+    "https://ga.jspm.io/npm:scheduler@0.23.2/index.js": "sha384-fPTMJAYOUl/x7BwJ5mYozirA2tKlxQ8xlVBNj4IJ2C2LZjt9HdPofyluUjmjiePu"
+  }
+}

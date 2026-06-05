@@ -33,6 +33,8 @@ module Importmap
       if app.config.importmap.sweep_cache && !app.config.cache_classes
         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+        app.config.importmap.cache_sweepers << app.root.join("app/assets/builds")
+        app.config.importmap.cache_sweepers.uniq!
         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
 
         ActiveSupport.on_load(:action_controller_base) do

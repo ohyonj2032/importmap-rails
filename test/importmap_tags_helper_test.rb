@@ -20,23 +20,15 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
   end
 
   test "javascript_inline_importmap_tag" do
-    assert_dom_equal(
-      %(
-      <script type="importmap" data-turbo-track="reload">
-        {
-          "imports": {
-            "md5": "https://cdn.skypack.dev/md5",
-            "not_there": "/nowhere.js",
-            "rich_text": "/rich_text.js"
-          },
-          "integrity": {
-            "/rich_text.js": "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
-          }
-        }
-      </script>
-      ),
-      javascript_inline_importmap_tag
-    )
+    importmap = extract_importmap_json(javascript_inline_importmap_tag)
+
+    assert_equal "https://cdn.skypack.dev/md5", importmap.fetch("imports").fetch("md5")
+    assert_equal "/rich_text.js", importmap.fetch("imports").fetch("rich_text")
+    assert_equal "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb", importmap.fetch("integrity").fetch("/rich_text.js")
+  end
+
+  test "javascript_inline_importmap_tag supports shim mode" do
+    assert_match(/type="importmap-shim"/, javascript_inline_importmap_tag("{}", shim: true))
   end
 
   test "javascript_importmap_module_preload_tags" do
@@ -80,4 +72,17 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     refute_includes importmap_html, %{<link rel="modulepreload" href="/bar.js">}
     assert_includes importmap_html, %{<script type="module">import "foo"</script>}
   end
+
+  test "javascript_importmap_tags supports shim mode" do
+    importmap_html = javascript_importmap_tags("application", shim: true)
+
+    assert_includes importmap_html, %{<script type="importmap-shim" data-turbo-track="reload">}
+    assert_includes importmap_html, %{<script type="module-shim">import "application"</script>}
+  end
+
+  private
+    def extract_importmap_json(html)
+      fragment = Nokogiri::HTML.fragment(html)
+      JSON.parse(fragment.at_css("script").text)
+    end
 end

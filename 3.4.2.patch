@@ -1,0 +1,291 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..2665fff 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,24 +1,24 @@
+ module Importmap::ImportmapTagsHelper
+   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
++  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, shim: false)
+     safe_join [
+-      javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
++      javascript_inline_importmap_tag(importmap.to_json(resolver: self), shim: shim),
+       javascript_importmap_module_preload_tags(importmap, entry_point:),
+-      javascript_import_module_tag(entry_point)
++      javascript_import_module_tag(entry_point, shim: shim)
+     ], "\n"
+   end
+ 
+   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+-  def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
++  def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self), shim: false)
+     tag.script importmap_json.html_safe,
+-      type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
++      type: shim ? "importmap-shim" : "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
+   end
+ 
+   # Import a named JavaScript module(s) using a script-module tag.
+-  def javascript_import_module_tag(*module_names)
++  def javascript_import_module_tag(*module_names, shim: false)
+     imports = Array(module_names).collect { |m| %(import "#{m}") }.join("\n")
+-    tag.script imports.html_safe, type: "module", nonce: request&.content_security_policy_nonce
++    tag.script imports.html_safe, type: shim ? "module-shim" : "module", nonce: request&.content_security_policy_nonce
+   end
+ 
+   # Link tags for preloading all modules marked as preload: true in the `importmap`
+@@ -44,4 +44,4 @@ module Importmap::ImportmapTagsHelper
+         tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
+       }, "\n")
+     end
+-end
++end
+\ No newline at end of file
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..151c045 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -33,6 +33,8 @@ module Importmap
+       if app.config.importmap.sweep_cache && !app.config.cache_classes
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
++        app.config.importmap.cache_sweepers << app.root.join("app/assets/builds")
++        app.config.importmap.cache_sweepers.uniq!
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+@@ -70,4 +72,4 @@ module Importmap
+       end
+     end
+   end
+-end
++end
+\ No newline at end of file
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..4e4fc2e 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -154,17 +154,20 @@ class Importmap::Map
+     end
+   end
+ 
++  def to_h(resolver:, cache_key: :map)
++    cache_as(cache_key) do
++      packages = expanded_packages_and_directories
++      build_import_map(packages, resolver: resolver)
++    end
++  end
++
+   # Returns a JSON hash (as a string) of all the resolved module paths of the pinned packages in the import map format.
+   # The `resolver` must respond to `path_to_asset`, such as `ActionController::Base.helpers` or
+   # `ApplicationController.helpers`. You'll want to use the resolver that has been configured for the `asset_host` you
+   # want these resolved paths to use. In case you need to resolve for different asset hosts, you can pass in a custom
+   # `cache_key` to vary the cache used by this method for the different cases.
+   def to_json(resolver:, cache_key: :json)
+-    cache_as(cache_key) do
+-      packages = expanded_packages_and_directories
+-      map = build_import_map(packages, resolver: resolver)
+-      JSON.pretty_generate(map)
+-    end
++    JSON.pretty_generate(to_h(resolver: resolver, cache_key: cache_key))
+   end
+ 
+   # Returns a SHA1 digest of the import map json that can be used as a part of a page etag to
+@@ -316,4 +319,4 @@ class Importmap::Map
+     def absolute_root_of(path)
+       (pathname = Pathname.new(path)).absolute? ? pathname : Rails.root.join(path)
+     end
+-end
++end
+\ No newline at end of file
+diff --git a/test/dummy/app/assets/config/manifest.js b/test/dummy/app/assets/config/manifest.js
+index c86e0e2..3e50994 100644
+--- a/test/dummy/app/assets/config/manifest.js
++++ b/test/dummy/app/assets/config/manifest.js
+@@ -1,5 +1,6 @@
+ //= link_tree ../images
+ //= link_directory ../stylesheets .css
+ //= link_tree ../../javascript .js
++//= link_tree ../../builds .js
+ //= link_tree ../../components .js
+-//= link_tree ../../../lib/assets/javascripts .js
++//= link_tree ../../../lib/assets/javascripts .js
+\ No newline at end of file
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..e3da1b8 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -5,11 +5,18 @@
+     <meta name="viewport" content="width=device-width,initial-scale=1">
+     <%= csrf_meta_tags %>
+     <%= csp_meta_tag %>
++    <% if Rails.env.development? %>
++      <meta name="importmap-digest" content="<%= Rails.application.importmap.digest(resolver: self) %>">
++      <meta name="importmap-version-path" content="<%= "/runtime_importmaps/version" %>">
++    <% end %>
++    <script type="esms-options">{"shimMode":true,"mapOverrides":true}</script>
++    <script async crossorigin="anonymous" src="https://ga.jspm.io/npm:es-module-shims@2.8.0/dist/es-module-shims.js"></script>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++    <%= javascript_importmap_tags "application", shim: true %>
+   </head>
+ 
+   <body>
+     <%= yield %>
+   </body>
+-</html>
++</html>
+\ No newline at end of file
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..30e7d83 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,12 @@
+ enable_integrity!
+ 
+ pin_all_from "app/assets/javascripts"
++pin_all_from "app/assets/builds", under: "builds", preload: false
+ 
++pin "application", to: "builds/application.js", preload: false
++pin "react", to: "https://ga.jspm.io/npm:react@18.3.1/index.js", preload: false, integrity: false
++pin "react-dom/client", to: "https://ga.jspm.io/npm:react-dom@18.3.1/client.js", preload: false, integrity: false
++pin "react/jsx-runtime", to: "https://ga.jspm.io/npm:react@18.3.1/jsx-runtime.js", preload: false, integrity: false
+ pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+ pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+\ No newline at end of file
+diff --git a/test/dummy/config/routes.rb b/test/dummy/config/routes.rb
+index a1b393b..d44857e 100644
+--- a/test/dummy/config/routes.rb
++++ b/test/dummy/config/routes.rb
+@@ -1,3 +1,8 @@
+ Rails.application.routes.draw do
+   mount Importmap::Engine => "/importmap"
+-end
++
++  get "runtime_importmaps/version", to: "runtime_importmaps#version"
++  get "runtime_importmaps/:name", to: "runtime_importmaps#show", as: :runtime_importmap
++
++  root "pages#show"
++end
+\ No newline at end of file
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..485efd7 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -20,23 +20,15 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+   end
+ 
+   test "javascript_inline_importmap_tag" do
+-    assert_dom_equal(
+-      %(
+-      <script type="importmap" data-turbo-track="reload">
+-        {
+-          "imports": {
+-            "md5": "https://cdn.skypack.dev/md5",
+-            "not_there": "/nowhere.js",
+-            "rich_text": "/rich_text.js"
+-          },
+-          "integrity": {
+-            "/rich_text.js": "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+-          }
+-        }
+-      </script>
+-      ),
+-      javascript_inline_importmap_tag
+-    )
++    importmap = extract_importmap_json(javascript_inline_importmap_tag)
++
++    assert_equal "https://cdn.skypack.dev/md5", importmap.fetch("imports").fetch("md5")
++    assert_equal "/rich_text.js", importmap.fetch("imports").fetch("rich_text")
++    assert_equal "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb", importmap.fetch("integrity").fetch("/rich_text.js")
++  end
++
++  test "javascript_inline_importmap_tag supports shim mode" do
++    assert_match(/type="importmap-shim"/, javascript_inline_importmap_tag("{}", shim: true))
+   end
+ 
+   test "javascript_importmap_module_preload_tags" do
+@@ -80,4 +72,17 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+     refute_includes importmap_html, %{<link rel="modulepreload" href="/bar.js">}
+     assert_includes importmap_html, %{<script type="module">import "foo"</script>}
+   end
+-end
++
++  test "javascript_importmap_tags supports shim mode" do
++    importmap_html = javascript_importmap_tags("application", shim: true)
++
++    assert_includes importmap_html, %{<script type="importmap-shim" data-turbo-track="reload">}
++    assert_includes importmap_html, %{<script type="module-shim">import "application"</script>}
++  end
++
++  private
++    def extract_importmap_json(html)
++      fragment = Nokogiri::HTML.fragment(html)
++      JSON.parse(fragment.at_css("script").text)
++    end
++end
+\ No newline at end of file
+diff --git a/test/importmap_test.rb b/test/importmap_test.rb
+index 007f1c2..b98c628 100644
+--- a/test/importmap_test.rb
++++ b/test/importmap_test.rb
+@@ -50,7 +50,7 @@ class ImportmapTest < ActiveSupport::TestCase
+     assert_not json.key?("integrity")
+   end
+ 
+-    test "enable_integrity! change the map to generate integrity attribute" do
++  test "enable_integrity! change the map to generate integrity attribute" do
+     @importmap = Importmap::Map.new.tap do |map|
+       map.enable_integrity!
+       map.pin "application", preload: false
+@@ -164,6 +164,19 @@ class ImportmapTest < ActiveSupport::TestCase
+     end
+   end
+ 
++  test "to_h returns resolved imports and integrity" do
++    importmap = Importmap::Map.new.tap do |map|
++      map.enable_integrity!
++      map.pin "application", integrity: true
++    end
++
++    map_hash = importmap.to_h(resolver: ApplicationController.helpers)
++    application_path = map_hash["imports"]["application"]
++
++    assert application_path
++    assert_equal map_hash["integrity"][application_path], JSON.parse(importmap.to_json(resolver: ApplicationController.helpers))["integrity"][application_path]
++  end
++
+   test "integrity: true with missing asset should be gracefully handled" do
+     importmap = Importmap::Map.new.tap do |map|
+       map.pin "missing", to: "nonexistent.js", preload: true, integrity: true
+@@ -192,8 +205,8 @@ class ImportmapTest < ActiveSupport::TestCase
+     assert_nil json["integrity"]
+   end
+ 
+-  test 'invalid importmap file results in error' do
+-    file = file_fixture('invalid_import_map.rb')
++  test "invalid importmap file results in error" do
++    file = file_fixture("invalid_import_map.rb")
+     importmap = Importmap::Map.new
+     assert_raises Importmap::Map::InvalidFile do
+       importmap.draw(file)
+@@ -233,6 +246,10 @@ class ImportmapTest < ActiveSupport::TestCase
+     assert_match(/^\w{40}$/, @importmap.digest(resolver: ApplicationController.helpers))
+   end
+ 
++  test "engine adds builds directory to cache sweepers" do
++    assert_includes Rails.application.config.importmap.cache_sweepers.map(&:to_s), Rails.root.join("app/assets/builds").to_s
++  end
++
+   test "separate caches" do
+     set_one = @importmap.preloaded_module_paths(resolver: ApplicationController.helpers, cache_key: "1").to_s
+ 
+@@ -412,4 +429,4 @@ class ImportmapTest < ActiveSupport::TestCase
+     def generate_importmap_json
+       @generate_importmap_json ||= JSON.parse @importmap.to_json(resolver: ApplicationController.helpers)
+     end
+-end
++end
+\ No newline at end of file

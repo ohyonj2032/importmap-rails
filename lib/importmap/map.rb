@@ -154,17 +154,20 @@ class Importmap::Map
     end
   end
 
+  def to_h(resolver:, cache_key: :map)
+    cache_as(cache_key) do
+      packages = expanded_packages_and_directories
+      build_import_map(packages, resolver: resolver)
+    end
+  end
+
   # Returns a JSON hash (as a string) of all the resolved module paths of the pinned packages in the import map format.
   # The `resolver` must respond to `path_to_asset`, such as `ActionController::Base.helpers` or
   # `ApplicationController.helpers`. You'll want to use the resolver that has been configured for the `asset_host` you
   # want these resolved paths to use. In case you need to resolve for different asset hosts, you can pass in a custom
   # `cache_key` to vary the cache used by this method for the different cases.
   def to_json(resolver:, cache_key: :json)
-    cache_as(cache_key) do
-      packages = expanded_packages_and_directories
-      map = build_import_map(packages, resolver: resolver)
-      JSON.pretty_generate(map)
-    end
+    JSON.pretty_generate(to_h(resolver: resolver, cache_key: cache_key))
   end
 
   # Returns a SHA1 digest of the import map json that can be used as a part of a page etag to

@@ -5,8 +5,15 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    <% if Rails.env.development? %>
+      <meta name="importmap-digest" content="<%= Rails.application.importmap.digest(resolver: self) %>">
+      <meta name="importmap-version-path" content="<%= "/runtime_importmaps/version" %>">
+    <% end %>
+    <script type="esms-options">{"shimMode":true,"mapOverrides":true}</script>
+    <script async crossorigin="anonymous" src="https://ga.jspm.io/npm:es-module-shims@2.8.0/dist/es-module-shims.js"></script>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+    <%= javascript_importmap_tags "application", shim: true %>
   </head>
 
   <body>

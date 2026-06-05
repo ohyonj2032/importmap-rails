@@ -1,0 +1,31 @@
+export function startDevelopmentReloading() {
+  const currentDigest = document.querySelector('meta[name="importmap-digest"]')
+  const versionPath = document.querySelector('meta[name="importmap-version-path"]')
+
+  if (!currentDigest || !versionPath) {
+    return
+  }
+
+  let digest = currentDigest.content
+
+  window.setInterval(async () => {
+    try {
+      const response = await fetch(versionPath.content, {
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+        credentials: "same-origin"
+      })
+
+      if (!response.ok) {
+        return
+      }
+
+      const payload = await response.json()
+
+      if (payload.digest && payload.digest !== digest) {
+        window.location.reload()
+      }
+    } catch (_) {
+    }
+  }, 1500)
+}

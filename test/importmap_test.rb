@@ -50,7 +50,7 @@ class ImportmapTest < ActiveSupport::TestCase
     assert_not json.key?("integrity")
   end
 
-    test "enable_integrity! change the map to generate integrity attribute" do
+  test "enable_integrity! change the map to generate integrity attribute" do
     @importmap = Importmap::Map.new.tap do |map|
       map.enable_integrity!
       map.pin "application", preload: false
@@ -164,6 +164,19 @@ class ImportmapTest < ActiveSupport::TestCase
     end
   end
 
+  test "to_h returns resolved imports and integrity" do
+    importmap = Importmap::Map.new.tap do |map|
+      map.enable_integrity!
+      map.pin "application", integrity: true
+    end
+
+    map_hash = importmap.to_h(resolver: ApplicationController.helpers)
+    application_path = map_hash["imports"]["application"]
+
+    assert application_path
+    assert_equal map_hash["integrity"][application_path], JSON.parse(importmap.to_json(resolver: ApplicationController.helpers))["integrity"][application_path]
+  end
+
   test "integrity: true with missing asset should be gracefully handled" do
     importmap = Importmap::Map.new.tap do |map|
       map.pin "missing", to: "nonexistent.js", preload: true, integrity: true
@@ -192,8 +205,8 @@ class ImportmapTest < ActiveSupport::TestCase
     assert_nil json["integrity"]
   end
 
-  test 'invalid importmap file results in error' do
-    file = file_fixture('invalid_import_map.rb')
+  test "invalid importmap file results in error" do
+    file = file_fixture("invalid_import_map.rb")
     importmap = Importmap::Map.new
     assert_raises Importmap::Map::InvalidFile do
       importmap.draw(file)
@@ -231,6 +244,10 @@ class ImportmapTest < ActiveSupport::TestCase
 
   test "digest" do
     assert_match(/^\w{40}$/, @importmap.digest(resolver: ApplicationController.helpers))
+  end
+
+  test "engine adds builds directory to cache sweepers" do
+    assert_includes Rails.application.config.importmap.cache_sweepers.map(&:to_s), Rails.root.join("app/assets/builds").to_s
   end
 
   test "separate caches" do
