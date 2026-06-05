@@ -4,9 +4,12 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
   attr_reader :request
 
   class FakeRequest
-    def initialize(nonce = nil)
+    def initialize(nonce = nil, user_agent = nil)
       @nonce = nonce
+      @user_agent = user_agent
     end
+
+    attr_reader :user_agent
 
     def send_early_hints(links); end
 
@@ -17,6 +20,16 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     def content_security_policy_nonce
       @nonce
     end
+  end
+
+  def setup
+    @original_safari_15_compatibility_modules = Rails.application.config.importmap.safari_15_compatibility_modules
+    Rails.application.config.importmap.safari_15_compatibility_modules = []
+  end
+
+  def teardown
+    @request = nil
+    Rails.application.config.importmap.safari_15_compatibility_modules = @original_safari_15_compatibility_modules
   end
 
   test "javascript_inline_importmap_tag" do
@@ -42,8 +55,8 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
   test "javascript_importmap_module_preload_tags" do
     assert_dom_equal(
       %(
-        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
+        <link rel="modulepreload" href="https://cdn.skypack.dev/md5" crossorigin="anonymous">
+        <link rel="modulepreload" href="/rich_text.js" crossorigin="anonymous" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
       ),
       javascript_importmap_module_preload_tags
     )
@@ -53,8 +66,6 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     @request = FakeRequest.new
 
     assert_no_match(/nonce/, javascript_importmap_tags("application"))
-  ensure
-    @request = nil
   end
 
   test "tags have nonce if CSP is configured" do
@@ -63,8 +74,6 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     assert_match(/nonce="iyhD0Yc0W\+c="/, javascript_inline_importmap_tag)
     assert_match(/nonce="iyhD0Yc0W\+c="/, javascript_import_module_tag("application"))
     assert_match(/nonce="iyhD0Yc0W\+c="/, javascript_importmap_module_preload_tags)
-  ensure
-    @request = nil
   end
 
   test "using a custom importmap" do
@@ -76,8 +85,19 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     assert_includes importmap_html, %{<script type="importmap" data-turbo-track="reload">}
     assert_includes importmap_html, %{"foo": "/foo.js"}
     assert_includes importmap_html, %{"bar": "/bar.js"}
-    assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js">}
-    refute_includes importmap_html, %{<link rel="modulepreload" href="/bar.js">}
-    assert_includes importmap_html, %{<script type="module">import "foo"</script>}
+    assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js" crossorigin="anonymous">}
+    refute_includes importmap_html, %{<link rel="modulepreload" href="/bar.js"}
+    assert_includes importmap_html, %{<script type="module" crossorigin="anonymous">import "foo"</script>}
+  end
+
+  test "safari 15 strips preload and integrity for configured compatibility modules" do
+    @request = FakeRequest.new(nil, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Safari/605.1.15")
+    Rails.application.config.importmap.safari_15_compatibility_modules = ["rich_text"]
+
+    importmap_html = javascript_importmap_tags("application")
+
+    assert_includes importmap_html, %{href="https://cdn.skypack.dev/md5"}
+    refute_includes importmap_html, %{href="/rich_text.js"}
+    refute_includes importmap_html, %{"/rich_text.js": "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"}
   end
 end

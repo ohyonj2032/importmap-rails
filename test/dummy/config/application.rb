@@ -23,6 +23,7 @@ require "importmap-rails"
 module Dummy
   class Application < Rails::Application
     config.load_defaults Rails::VERSION::STRING.to_f
+    config.importmap.safari_15_compatibility_modules = %w[rich_text]
 
     # Configuration for the application, engines, and railties goes here.
     #
