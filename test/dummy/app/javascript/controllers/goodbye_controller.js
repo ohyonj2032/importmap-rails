@@ -1,7 +1,48 @@
-import { Controller } from "stimulus"
+import { Controller } from "@hotwired/stimulus"
+import dayjs from "dayjs"
 
 export default class extends Controller {
+  static targets = ["message", "status"]
+
   connect() {
-    this.element.textContent = "Goodbye World"
+    this.notificationHandler = this.handleNotification.bind(this)
+    document.addEventListener("importmap:notifications:received", this.notificationHandler)
+    this.render({
+      type: "connected",
+      message: "Stimulus controller connected",
+      timestamp: dayjs().toISOString()
+    })
+  }
+
+  disconnect() {
+    document.removeEventListener("importmap:notifications:received", this.notificationHandler)
+  }
+
+  ping() {
+    document.dispatchEvent(
+      new CustomEvent("importmap:notifications:received", {
+        detail: {
+          type: "manual",
+          message: `Manual refresh ${this.element.id || "goodbye"}`,
+          timestamp: dayjs().toISOString()
+        }
+      })
+    )
+  }
+
+  handleNotification(event) {
+    this.render(event.detail || {})
+  }
+
+  render({ type = "waiting", message = "Waiting for updates", timestamp = dayjs().toISOString() }) {
+    this.element.dataset.connectionState = type
+
+    if (this.hasStatusTarget) {
+      this.statusTarget.textContent = type
+    }
+
+    if (this.hasMessageTarget) {
+      this.messageTarget.textContent = `${message} · ${timestamp}`
+    }
   }
 }

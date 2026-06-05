@@ -1,7 +1,16 @@
 enable_integrity!
 
-pin_all_from "app/assets/javascripts"
+pin "application", preload: false
+pin "@hotwired/turbo-rails", to: "turbo.min.js", preload: ["application"]
+pin "@hotwired/stimulus", to: "stimulus.min.js", preload: ["application"]
+pin "@hotwired/stimulus-loading", to: "stimulus-loading.js", preload: ["application"]
+pin "dayjs", to: "https://ga.jspm.io/npm:dayjs@1.11.13/dayjs.min.js", preload: ["application"], integrity: false
+pin "md5", to: "https://ga.jspm.io/npm:md5@2.3.0/md5.js", preload: ["application"], integrity: false
 
-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
-pin "not_there", to: "nowhere.js", preload: false, integrity: false
-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+if Gem::Version.new(Rails.version) >= Gem::Version.new("7.0.0")
+  pin "@rails/actioncable", to: "actioncable.esm.js", preload: ["application"]
+end
+
+pin_all_from "app/javascript/controllers", under: "controllers", preload: true, integrity: true
+pin_all_from "app/javascript/channels", under: "channels", preload: ["application"], integrity: true
+pin_all_from "app/javascript/lib", under: "lib", integrity: true
