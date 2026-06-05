@@ -69,14 +69,14 @@ class Importmap::Map
     @integrity = true
   end
 
-  def pin(name, to: nil, preload: true, integrity: true)
+  def pin(name, to: nil, preload: true, integrity: true, safari_15_preload: true)
     clear_cache
-    @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
+    @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity, safari_15_preload: safari_15_preload)
   end
 
-  def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true)
+  def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true, safari_15_preload: true)
     clear_cache
-    @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
+    @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity, safari_15_preload: safari_15_preload)
   end
 
   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
@@ -194,8 +194,8 @@ class Importmap::Map
   end
 
   private
-    MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, keyword_init: true)
-    MappedFile = Struct.new(:name, :path, :preload, :integrity, keyword_init: true)
+    MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, :safari_15_preload, keyword_init: true)
+    MappedFile = Struct.new(:name, :path, :preload, :integrity, :safari_15_preload, keyword_init: true)
 
     def cache_as(name)
       if result = @cache[name.to_s]
@@ -284,7 +284,8 @@ class Importmap::Map
               name: module_name,
               path: module_path,
               preload: mapping.preload,
-              integrity: mapping.integrity
+              integrity: mapping.integrity,
+              safari_15_preload: mapping.safari_15_preload
             )
           end
         end

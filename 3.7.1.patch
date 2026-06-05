@@ -1,0 +1,110 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..e2ea25a 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,9 +1,9 @@
+ module Importmap::ImportmapTagsHelper
+   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
++  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, crossorigin: "anonymous", safari_15_compatibility: true)
+     safe_join [
+       javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
+-      javascript_importmap_module_preload_tags(importmap, entry_point:),
++      javascript_importmap_module_preload_tags(importmap, entry_point:, crossorigin:, safari_15_compatibility:),
+       javascript_import_module_tag(entry_point)
+     ], "\n"
+   end
+@@ -24,24 +24,42 @@ module Importmap::ImportmapTagsHelper
+   # Link tags for preloading all modules marked as preload: true in the `importmap`
+   # (defaults to Rails.application.importmap), such that they'll be fetched
+   # in advance by browsers supporting this link type (https://caniuse.com/?search=modulepreload).
+-  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application")
++  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application", crossorigin: "anonymous", safari_15_compatibility: true)
+     packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point)
+ 
+-    _generate_preload_tags(packages) { |path, package| [path, { integrity: package.integrity }] }
++    _generate_preload_tags(packages.to_a, crossorigin: crossorigin, safari_15_compatibility: safari_15_compatibility) { |(path, package)| [path, { integrity: package.integrity, package: package }] }
+   end
+ 
+   # Link tag(s) for preloading the JavaScript module residing in `*paths`. Will return one link tag per path element.
+-  def javascript_module_preload_tag(*paths)
+-    _generate_preload_tags(paths) { |path| [path, {}] }
++  def javascript_module_preload_tag(*paths, crossorigin: "anonymous")
++    _generate_preload_tags(paths, crossorigin: crossorigin) { |path| [path, {}] }
+   end
+ 
+   private
+-    def _generate_preload_tags(items)
++    def _generate_preload_tags(items, crossorigin: "anonymous", safari_15_compatibility: false)
+       content_security_policy_nonce = request&.content_security_policy_nonce
+ 
+       safe_join(Array(items).collect { |item|
+         path, options = yield(item)
+-        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
+-      }, "\n")
++        
++        # Extract package information from options if available
++        package = options[:package]
++        
++        # Remove package from options before generating the tag
++        tag_options = options.except(:package)
++        
++        # Safari 15 compatibility: Skip preloading based on integrity or per-module setting
++        if safari_15_compatibility
++          # If package has explicit safari_15_preload setting, use that
++          if package && package.respond_to?(:safari_15_preload) && !package.safari_15_preload
++            next
++          # Otherwise skip modules with integrity hashes as fallback
++          elsif tag_options[:integrity].present?
++            next
++          end
++        end
++        
++        tag.link rel: "modulepreload", href: path, crossorigin: crossorigin, nonce: content_security_policy_nonce, **tag_options
++      }.compact, "\n")
+     end
+ end
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..95562eb 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -69,14 +69,14 @@ class Importmap::Map
+     @integrity = true
+   end
+ 
+-  def pin(name, to: nil, preload: true, integrity: true)
++  def pin(name, to: nil, preload: true, integrity: true, safari_15_preload: true)
+     clear_cache
+-    @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
++    @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity, safari_15_preload: safari_15_preload)
+   end
+ 
+-  def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true)
++  def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true, safari_15_preload: true)
+     clear_cache
+-    @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
++    @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity, safari_15_preload: safari_15_preload)
+   end
+ 
+   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
+@@ -194,8 +194,8 @@ class Importmap::Map
+   end
+ 
+   private
+-    MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, keyword_init: true)
+-    MappedFile = Struct.new(:name, :path, :preload, :integrity, keyword_init: true)
++    MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, :safari_15_preload, keyword_init: true)
++    MappedFile = Struct.new(:name, :path, :preload, :integrity, :safari_15_preload, keyword_init: true)
+ 
+     def cache_as(name)
+       if result = @cache[name.to_s]
+@@ -284,7 +284,8 @@ class Importmap::Map
+               name: module_name,
+               path: module_path,
+               preload: mapping.preload,
+-              integrity: mapping.integrity
++              integrity: mapping.integrity,
++              safari_15_preload: mapping.safari_15_preload
+             )
+           end
+         end
