@@ -1,12 +1,14 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-environment="<%= Rails.env %>" data-controller-debug="<%= Rails.env.development? %>">
   <head>
     <title>Dummy</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
+    <%= tag.meta name: "action-cable-url", content: action_cable_with_token_url if Rails.env.production? %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+    <%= javascript_importmap_tags %>
   </head>
 
   <body>

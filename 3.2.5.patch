@@ -1,0 +1,404 @@
+diff --git a/test/dummy/app/controllers/application_controller.rb b/test/dummy/app/controllers/application_controller.rb
+index 09705d1..fc34652 100644
+--- a/test/dummy/app/controllers/application_controller.rb
++++ b/test/dummy/app/controllers/application_controller.rb
+@@ -1,2 +1,10 @@
+ class ApplicationController < ActionController::Base
++  stale_when_importmap_changes
++
++  private
++
++  def action_cable_with_token_url
++    config = Rails.application.config.action_cable
++    config.url || "/cable"
++  end
+ end
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..a137a49 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,5 @@
++import "@hotwired/turbo-rails"
++import "controllers"
++import "channels"
++import "lib/cable"
++import "lib/environment"
+diff --git a/test/dummy/app/javascript/controllers/goodbye_controller.js b/test/dummy/app/javascript/controllers/goodbye_controller.js
+index 9a95547..3e0782d 100644
+--- a/test/dummy/app/javascript/controllers/goodbye_controller.js
++++ b/test/dummy/app/javascript/controllers/goodbye_controller.js
+@@ -1,6 +1,8 @@
+-import { Controller } from "stimulus"
++import { Controller } from "@hotwired/stimulus"
+ 
+ export default class extends Controller {
++  static targets = ["message"]
++
+   connect() {
+     this.element.textContent = "Goodbye World"
+   }
+diff --git a/test/dummy/app/javascript/controllers/index.js b/test/dummy/app/javascript/controllers/index.js
+index 6c33acd..1aad79b 100644
+--- a/test/dummy/app/javascript/controllers/index.js
++++ b/test/dummy/app/javascript/controllers/index.js
+@@ -1 +1,18 @@
+-import "controllers/goodbye_controller"
++import { Application } from "@hotwired/stimulus"
++import HelloController from "controllers/hello_controller"
++import GoodbyeController from "controllers/goodbye_controller"
++import NotificationController from "controllers/notification_controller"
++
++const application = Application.start()
++
++application.register("hello", HelloController)
++application.register("goodbye", GoodbyeController)
++application.register("notification", NotificationController)
++
++application.debug = document.documentElement.hasAttribute("data-controller-debug")
++
++application.stimulusUseLogger = true
++
++window.Stimulus = application
++
++export { application }
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..796bf2a 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -1,12 +1,14 @@
+ <!DOCTYPE html>
+-<html>
++<html lang="en" data-environment="<%= Rails.env %>" data-controller-debug="<%= Rails.env.development? %>">
+   <head>
+     <title>Dummy</title>
+     <meta name="viewport" content="width=device-width,initial-scale=1">
+     <%= csrf_meta_tags %>
+     <%= csp_meta_tag %>
++    <%= tag.meta name: "action-cable-url", content: action_cable_with_token_url if Rails.env.production? %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++    <%= javascript_importmap_tags %>
+   </head>
+ 
+   <body>
+diff --git a/test/dummy/config/environments/development.rb b/test/dummy/config/environments/development.rb
+index d533da7..d839ba7 100644
+--- a/test/dummy/config/environments/development.rb
++++ b/test/dummy/config/environments/development.rb
+@@ -1,21 +1,12 @@
+ require "active_support/core_ext/integer/time"
+ 
+ Rails.application.configure do
+-  # Settings specified here will take precedence over those in config/application.rb.
+-
+-  # In the development environment your application's code is reloaded any time
+-  # it changes. This slows down response time but is perfect for development
+-  # since you don't have to restart the web server when you make code changes.
+   config.cache_classes = false
+ 
+-  # Do not eager load code on boot.
+   config.eager_load = false
+ 
+-  # Show full error reports.
+   config.consider_all_requests_local = true
+ 
+-  # Enable/disable caching. By default caching is disabled.
+-  # Run rails dev:cache to toggle caching.
+   if Rails.root.join('tmp', 'caching-dev.txt').exist?
+     config.action_controller.perform_caching = true
+     config.action_controller.enable_fragment_cache_logging = true
+@@ -30,42 +21,35 @@ Rails.application.configure do
+     config.cache_store = :null_store
+   end
+ 
+-  # Store uploaded files on the local file system (see config/storage.yml for options).
+   config.active_storage.service = :local
+ 
+-  # Print deprecation notices to the Rails logger.
+   config.active_support.deprecation = :log
+ 
+-  # Raise exceptions for disallowed deprecations.
+   config.active_support.disallowed_deprecation = :raise
+ 
+-  # Tell Active Support which deprecation messages to disallow.
+   config.active_support.disallowed_deprecation_warnings = []
+ 
+-  # Raise an error on page load if there are pending migrations.
+   config.active_record.migration_error = :page_load
+ 
+-  # Highlight code that triggered database queries in logs.
+   config.active_record.verbose_query_logs = true
+ 
+-  # Debug mode disables concatenation and preprocessing of assets.
+-  # This option may cause significant delays in view rendering with a large
+-  # number of complex assets.
+   config.assets.debug = true
+ 
+-  # Suppress logger output for asset requests.
+   config.assets.quiet = true
+ 
+-  # Raises error for missing translations.
+-  # config.i18n.raise_on_missing_translations = true
++  config.assets.integrity_hash_algorithm = "sha384"
++
++  config.importmap.sweep_cache = true
++  config.importmap.cache_sweepers << Rails.root.join("app/javascript")
++  config.importmap.cache_sweepers << Rails.root.join("app/components")
++  config.importmap.cache_sweepers << Rails.root.join("vendor/javascript")
+ 
+-  # Annotate rendered view with file names.
+-  # config.action_view.annotate_rendered_view_with_filenames = true
++  config.action_cable.disable_request_forgery_protection = true
+ 
+-  # Use an evented file watcher to asynchronously detect changes in source code,
+-  # routes, locales, etc. This feature depends on the listen gem.
+-  # config.file_watcher = ActiveSupport::EventedFileUpdateChecker
++  config.action_cable.allowed_request_origins = [/http:\/\/localhost:\d+/]
+ 
+-  # Uncomment if you wish to allow Action Cable access from any origin.
+-  # config.action_cable.disable_request_forgery_protection = true
++  config.public_file_server.headers = {
++    'Cache-Control' => "public, max-age=0, must-revalidate",
++    'X-Content-Type-Options' => 'nosniff'
++  }
+ end
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..87d13a9 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -1,118 +1,63 @@
+ require "active_support/core_ext/integer/time"
+ 
+ Rails.application.configure do
+-  # Settings specified here will take precedence over those in config/application.rb.
+-
+-  # Code is not reloaded between requests.
+   config.cache_classes = true
+ 
+-  # Eager load code on boot. This eager loads most of Rails and
+-  # your application in memory, allowing both threaded web servers
+-  # and those relying on copy on write to perform better.
+-  # Rake tasks automatically ignore this option for performance.
+   config.eager_load = true
+ 
+-  # Full error reports are disabled and caching is turned on.
+   config.consider_all_requests_local       = false
+   config.action_controller.perform_caching = true
+ 
+-  # Ensures that a master key has been made available in either ENV["RAILS_MASTER_KEY"]
+-  # or in config/master.key. This key is used to decrypt credentials (and other encrypted files).
+-  # config.require_master_key = true
+-
+-  # Disable serving static files from the `/public` folder by default since
+-  # Apache or NGINX already handles this.
+   config.public_file_server.enabled = ENV['RAILS_SERVE_STATIC_FILES'].present?
+ 
+-  # Compress CSS using a preprocessor.
+-  # config.assets.css_compressor = :sass
+-
+-  # Do not fallback to assets pipeline if a precompiled asset is missed.
+   config.assets.compile = false
+ 
+-  # Enable serving of images, stylesheets, and JavaScripts from an asset server.
+-  # config.asset_host = 'http://assets.example.com'
++  config.assets.integrity_hash_algorithm = "sha384"
+ 
+-  # Specifies the header that your server uses for sending files.
+-  # config.action_dispatch.x_sendfile_header = 'X-Sendfile' # for Apache
+-  # config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect' # for NGINX
++  config.asset_host = ENV.fetch("ASSET_HOST", nil)
+ 
+-  # Store uploaded files on the local file system (see config/storage.yml for options).
+-  config.active_storage.service = :local
++  config.importmap.sweep_cache = false
+ 
+-  # Mount Action Cable outside main process or domain.
+-  # config.action_cable.mount_path = nil
+-  # config.action_cable.url = 'wss://example.com/cable'
+-  # config.action_cable.allowed_request_origins = [ 'http://example.com', /http:\/\/example.*/ ]
++  config.action_cable.mount_path = "/cable"
++  config.action_cable.url = ENV.fetch("ACTION_CABLE_URL", "wss://#{ENV.fetch('APPLICATION_HOST', 'localhost')}/cable")
++  config.action_cable.allowed_request_origins = ENV.fetch("ACTION_CABLE_ALLOWED_ORIGINS", "").split(",").presence
+ 
+-  # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
+-  # config.force_ssl = true
++  config.action_dispatch.x_sendfile_header = 'X-Accel-Redirect'
+ 
+-  # Include generic and useful information about system operation, but avoid logging too much
+-  # information to avoid inadvertent exposure of personally identifiable information (PII).
+-  config.log_level = :info
++  config.active_storage.service = :local
+ 
+-  # Prepend all log lines with the following tags.
+-  config.log_tags = [ :request_id ]
++  config.force_ssl = true
+ 
+-  # Use a different cache store in production.
+-  # config.cache_store = :mem_cache_store
++  config.log_level = :info
+ 
+-  # Use a real queuing backend for Active Job (and separate queues per environment).
+-  # config.active_job.queue_adapter     = :resque
+-  # config.active_job.queue_name_prefix = "dummy_production"
++  config.log_tags = [ :request_id ]
+ 
+-  # Ignore bad email addresses and do not raise email delivery errors.
+-  # Set this to true and configure the email server for immediate delivery to raise delivery errors.
+-  # config.action_mailer.raise_delivery_errors = false
++  config.cache_store = :mem_cache_store
+ 
+-  # Enable locale fallbacks for I18n (makes lookups for any locale fall back to
+-  # the I18n.default_locale when a translation cannot be found).
+   config.i18n.fallbacks = true
+ 
+-  # Send deprecation notices to registered listeners.
+   config.active_support.deprecation = :notify
+ 
+-  # Log disallowed deprecations.
+   config.active_support.disallowed_deprecation = :log
+ 
+-  # Tell Active Support which deprecation messages to disallow.
+   config.active_support.disallowed_deprecation_warnings = []
+ 
+-  # Use default logging formatter so that PID and timestamp are not suppressed.
+   config.log_formatter = ::Logger::Formatter.new
+ 
+-  # Use a different logger for distributed setups.
+-  # require "syslog/logger"
+-  # config.logger = ActiveSupport::TaggedLogging.new(Syslog::Logger.new 'app-name')
+-
+   if ENV["RAILS_LOG_TO_STDOUT"].present?
+     logger           = ActiveSupport::Logger.new(STDOUT)
+     logger.formatter = config.log_formatter
+     config.logger    = ActiveSupport::TaggedLogging.new(logger)
+   end
+ 
+-  # Do not dump schema after migrations.
+   config.active_record.dump_schema_after_migration = false
+ 
+-  # Inserts middleware to perform automatic connection switching.
+-  # The `database_selector` hash is used to pass options to the DatabaseSelector
+-  # middleware. The `delay` is used to determine how long to wait after a write
+-  # to send a subsequent read to the primary.
+-  #
+-  # The `database_resolver` class is used by the middleware to determine which
+-  # database is appropriate to use based on the time delay.
+-  #
+-  # The `database_resolver_context` class is used by the middleware to set
+-  # timestamps for the last write to the primary. The resolver uses the context
+-  # class timestamps to determine how long to wait before reading from the
+-  # replica.
+-  #
+-  # By default Rails will store a last write timestamp in the session. The
+-  # DatabaseSelector middleware is designed as such you can define your own
+-  # strategy for connection switching and pass that into the middleware through
+-  # these configuration options.
+-  # config.active_record.database_selector = { delay: 2.seconds }
+-  # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+-  # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
++  config.public_file_server.headers = {
++    'Cache-Control' => "public, max-age=#{1.year.to_i}, immutable",
++    'X-Content-Type-Options' => 'nosniff'
++  }
++
++  config.ssl_options = {
++    hsts: { subdomains: true, preload: true, expires: 1.year }
++  }
+ end
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..f17ff19 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,16 @@
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++pin "application", preload: true
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++pin_all_from "app/javascript/controllers", under: "controllers", preload: true
++
++pin_all_from "app/javascript/lib", under: "lib", preload: true
++
++pin_all_from "app/javascript/channels", under: "channels", preload: true
++
++pin_all_from "app/components", under: "controllers", to: "", preload: true
++
++pin "@hotwired/stimulus", to: "https://ga.jspm.io/npm:@hotwired/stimulus@3.2.2/dist/stimulus.js", preload: true
++pin "@hotwired/turbo-rails", to: "https://ga.jspm.io/npm:@hotwired/turbo-rails@8.0.12/dist/turbo.min.js", preload: true
++
++pin "debounce", to: "https://ga.jspm.io/npm:debounce@2.2.0/index.js", preload: false
+diff --git a/test/dummy/config/initializers/content_security_policy.rb b/test/dummy/config/initializers/content_security_policy.rb
+index 41c4301..312c90c 100644
+--- a/test/dummy/config/initializers/content_security_policy.rb
++++ b/test/dummy/config/initializers/content_security_policy.rb
+@@ -1,28 +1,39 @@
+-# Be sure to restart your server when you modify this file.
+-
+-# Define an application-wide content security policy
+-# For further information see the following documentation
+-# https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy
+-
+-# Rails.application.config.content_security_policy do |policy|
+-#   policy.default_src :self, :https
+-#   policy.font_src    :self, :https, :data
+-#   policy.img_src     :self, :https, :data
+-#   policy.object_src  :none
+-#   policy.script_src  :self, :https
+-#   policy.style_src   :self, :https
+-
+-#   # Specify URI for violation reports
+-#   # policy.report_uri "/csp-violation-report-endpoint"
+-# end
+-
+-# If you are using UJS then enable automatic nonce generation
+-# Rails.application.config.content_security_policy_nonce_generator = -> request { SecureRandom.base64(16) }
+-
+-# Set the nonce only to specific directives
+-# Rails.application.config.content_security_policy_nonce_directives = %w(script-src)
+-
+-# Report CSP violations to a specified URI
+-# For further information see the following documentation:
+-# https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy-Report-Only
+-# Rails.application.config.content_security_policy_report_only = true
++Rails.application.config.content_security_policy do |policy|
++  policy.default_src :self, :https
++
++  policy.script_src  :self, :https,
++    "https://ga.jspm.io",
++    "https://cdn.skypack.dev",
++    "https://esm.sh"
++
++  policy.style_src   :self, :https, :unsafe_inline
++
++  policy.img_src     :self, :https, :data
++
++  policy.font_src    :self, :https, :data
++
++  policy.connect_src :self, :https, "ws://localhost:3000", "wss://localhost:3000",
++    "https://ga.jspm.io"
++
++  policy.object_src  :none
++
++  policy.frame_ancestors :none
++
++  policy.base_uri     :self
++
++  policy.form_action  :self
++
++  policy.frame_src    :self, :https
++
++  policy.manifest_src :self
++end
++
++Rails.application.config.content_security_policy_nonce_generator = -> request { SecureRandom.base64(16) }
++
++Rails.application.config.content_security_policy_nonce_directives = %w(script-src style-src)
++
++if Rails.env.production?
++  Rails.application.config.content_security_policy_report_only = false
++else
++  Rails.application.config.content_security_policy_report_only = true
++end

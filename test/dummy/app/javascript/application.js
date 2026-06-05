@@ -1,0 +1,5 @@
+import "@hotwired/turbo-rails"
+import "controllers"
+import "channels"
+import "lib/cable"
+import "lib/environment"
