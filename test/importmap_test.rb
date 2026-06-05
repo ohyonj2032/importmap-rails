@@ -209,6 +209,26 @@ class ImportmapTest < ActiveSupport::TestCase
     assert_no_match(/tinymce/, preloading_module_paths)
   end
 
+  test "preloaded_module_paths with dynamic: false excludes static_only modules" do
+    importmap = Importmap::Map.new.tap do |map|
+      map.pin "static_module", to: "static.js", preload: :static_only
+      map.pin "dynamic_module", to: "dynamic.js", preload: true
+      map.pin "lazy_module", to: "lazy.js", preload: false
+    end
+
+    # With dynamic: true (default), :static_only modules are included
+    all_paths = importmap.preloaded_module_paths(resolver: ApplicationController.helpers, dynamic: true)
+    assert_includes all_paths, "/static.js"
+    assert_includes all_paths, "/dynamic.js"
+    refute_includes all_paths, "/lazy.js"
+
+    # With dynamic: false, :static_only modules are excluded (Safari 15 workaround)
+    static_only_paths = importmap.preloaded_module_paths(resolver: ApplicationController.helpers, dynamic: false)
+    refute_includes static_only_paths, "/static.js"
+    assert_includes static_only_paths, "/dynamic.js"
+    refute_includes static_only_paths, "/lazy.js"
+  end
+
   test "preloaded modules are included in preload tags based on single entry_point provided" do
     preloading_module_paths = @importmap.preloaded_module_paths(resolver: ApplicationController.helpers, entry_point: "alternate").to_s
     assert_no_match(/leaflet/, preloading_module_paths)

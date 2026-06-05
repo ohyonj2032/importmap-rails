@@ -24,24 +24,37 @@ module Importmap::ImportmapTagsHelper
   # Link tags for preloading all modules marked as preload: true in the `importmap`
   # (defaults to Rails.application.importmap), such that they'll be fetched
   # in advance by browsers supporting this link type (https://caniuse.com/?search=modulepreload).
-  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application")
-    packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point)
+  #
+  # By default, modules with preload: :static_only are excluded from preloading to prevent
+  # Safari 15 SRI cache collision bugs with es-module-shims dynamic imports.
+  # Pass dynamic: true to include all modules regardless of preload setting.
+  #
+  # When `safari15_sri_workaround: true` is passed, modules with integrity hashes
+  # will have `crossorigin="anonymous"` added to preload tags to prevent Safari 15
+  # SRI cache collision bugs with es-module-shims dynamic imports.
+  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application", dynamic: false, safari15_sri_workaround: true)
+    packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point, dynamic: dynamic)
 
-    _generate_preload_tags(packages) { |path, package| [path, { integrity: package.integrity }] }
+    _generate_preload_tags(packages, safari15_sri_workaround:) { |path, package|
+      options = {}
+      options[:crossorigin] = "anonymous" if safari15_sri_workaround && package.integrity
+      options[:integrity] = package.integrity if package.integrity
+      [path, options]
+    }
   end
 
   # Link tag(s) for preloading the JavaScript module residing in `*paths`. Will return one link tag per path element.
-  def javascript_module_preload_tag(*paths)
-    _generate_preload_tags(paths) { |path| [path, {}] }
+  def javascript_module_preload_tag(*paths, crossorigin: nil)
+    _generate_preload_tags(paths) { |path| [path, { crossorigin: }] }
   end
 
   private
-    def _generate_preload_tags(items)
+    def _generate_preload_tags(items, safari15_sri_workaround: false)
       content_security_policy_nonce = request&.content_security_policy_nonce
 
       safe_join(Array(items).collect { |item|
         path, options = yield(item)
-        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
+        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options.compact
       }, "\n")
     end
 end

@@ -84,8 +84,12 @@ class Importmap::Map
   # resolver that has been configured for the `asset_host` you want these resolved paths to use. In case you need to
   # resolve for different asset hosts, you can pass in a custom `cache_key` to vary the cache used by this method for
   # the different cases.
-  def preloaded_module_paths(resolver:, entry_point: "application", cache_key: :preloaded_module_paths)
-    preloaded_module_packages(resolver: resolver, entry_point: entry_point, cache_key: cache_key).keys
+  #
+  # When `dynamic: false` is passed, modules with preload: :static_only are excluded from preloading.
+  # This is useful for Safari 15 compatibility where preloading SRI-enabled dynamic modules causes
+  # cache collision bugs with es-module-shims.
+  def preloaded_module_paths(resolver:, entry_point: "application", cache_key: :preloaded_module_paths, dynamic: true)
+    preloaded_module_packages(resolver: resolver, entry_point: entry_point, cache_key: cache_key, dynamic: dynamic).keys
   end
 
   # Returns a hash of resolved module paths to their corresponding package objects for all pinned packages
@@ -111,6 +115,11 @@ class Importmap::Map
   #   A custom cache key to vary the cache used by this method for different cases, such as resolving
   #   for different asset hosts. Defaults to +:preloaded_module_packages+.
   #
+  # [+dynamic+]
+  #   When +false+, modules with +preload: :static_only+ are excluded from preloading.
+  #   This prevents Safari 15 SRI cache collision bugs with es-module-shims for dynamically
+  #   imported modules (e.g., React.lazy). Defaults to +true+.
+  #
   # ==== Returns
   #
   # A hash where:
@@ -134,9 +143,12 @@ class Importmap::Map
   #
   #   # Use a custom cache key for different asset hosts
   #   packages = importmap.preloaded_module_packages(resolver: helpers, cache_key: "cdn_host")
-  def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages)
+  #
+  #   # Exclude static-only modules (Safari 15 SRI workaround)
+  #   packages = importmap.preloaded_module_packages(resolver: helpers, dynamic: false)
+  def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages, dynamic: true)
     cache_as(cache_key) do
-      expanded_preloading_packages_and_directories(entry_point:).filter_map do |_, package|
+      expanded_preloading_packages_and_directories(entry_point:, dynamic: dynamic).filter_map do |_, package|
         resolved_path = resolve_asset_path(package.path, resolver: resolver)
         next unless resolved_path
 
@@ -264,8 +276,18 @@ class Importmap::Map
       end
     end
 
-    def expanded_preloading_packages_and_directories(entry_point:)
-      expanded_packages_and_directories.select { |name, mapping| mapping.preload.in?([true, false]) ? mapping.preload : (Array(mapping.preload) & Array(entry_point)).any? }
+    def expanded_preloading_packages_and_directories(entry_point:, dynamic: true)
+      expanded_packages_and_directories.select do |name, mapping|
+        preload_value = mapping.preload
+        case preload_value
+        when true, false
+          preload_value
+        when :static_only
+          dynamic
+        else
+          (Array(preload_value) & Array(entry_point)).any?
+        end
+      end
     end
 
     def expanded_packages_and_directories

@@ -1,0 +1,263 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..344b582 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -24,24 +24,37 @@ module Importmap::ImportmapTagsHelper
+   # Link tags for preloading all modules marked as preload: true in the `importmap`
+   # (defaults to Rails.application.importmap), such that they'll be fetched
+   # in advance by browsers supporting this link type (https://caniuse.com/?search=modulepreload).
+-  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application")
+-    packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point)
++  #
++  # By default, modules with preload: :static_only are excluded from preloading to prevent
++  # Safari 15 SRI cache collision bugs with es-module-shims dynamic imports.
++  # Pass dynamic: true to include all modules regardless of preload setting.
++  #
++  # When `safari15_sri_workaround: true` is passed, modules with integrity hashes
++  # will have `crossorigin="anonymous"` added to preload tags to prevent Safari 15
++  # SRI cache collision bugs with es-module-shims dynamic imports.
++  def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application", dynamic: false, safari15_sri_workaround: true)
++    packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point, dynamic: dynamic)
+ 
+-    _generate_preload_tags(packages) { |path, package| [path, { integrity: package.integrity }] }
++    _generate_preload_tags(packages, safari15_sri_workaround:) { |path, package|
++      options = {}
++      options[:crossorigin] = "anonymous" if safari15_sri_workaround && package.integrity
++      options[:integrity] = package.integrity if package.integrity
++      [path, options]
++    }
+   end
+ 
+   # Link tag(s) for preloading the JavaScript module residing in `*paths`. Will return one link tag per path element.
+-  def javascript_module_preload_tag(*paths)
+-    _generate_preload_tags(paths) { |path| [path, {}] }
++  def javascript_module_preload_tag(*paths, crossorigin: nil)
++    _generate_preload_tags(paths) { |path| [path, { crossorigin: }] }
+   end
+ 
+   private
+-    def _generate_preload_tags(items)
++    def _generate_preload_tags(items, safari15_sri_workaround: false)
+       content_security_policy_nonce = request&.content_security_policy_nonce
+ 
+       safe_join(Array(items).collect { |item|
+         path, options = yield(item)
+-        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
++        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options.compact
+       }, "\n")
+     end
+ end
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..6b0b8b2 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -84,8 +84,12 @@ class Importmap::Map
+   # resolver that has been configured for the `asset_host` you want these resolved paths to use. In case you need to
+   # resolve for different asset hosts, you can pass in a custom `cache_key` to vary the cache used by this method for
+   # the different cases.
+-  def preloaded_module_paths(resolver:, entry_point: "application", cache_key: :preloaded_module_paths)
+-    preloaded_module_packages(resolver: resolver, entry_point: entry_point, cache_key: cache_key).keys
++  #
++  # When `dynamic: false` is passed, modules with preload: :static_only are excluded from preloading.
++  # This is useful for Safari 15 compatibility where preloading SRI-enabled dynamic modules causes
++  # cache collision bugs with es-module-shims.
++  def preloaded_module_paths(resolver:, entry_point: "application", cache_key: :preloaded_module_paths, dynamic: true)
++    preloaded_module_packages(resolver: resolver, entry_point: entry_point, cache_key: cache_key, dynamic: dynamic).keys
+   end
+ 
+   # Returns a hash of resolved module paths to their corresponding package objects for all pinned packages
+@@ -111,6 +115,11 @@ class Importmap::Map
+   #   A custom cache key to vary the cache used by this method for different cases, such as resolving
+   #   for different asset hosts. Defaults to +:preloaded_module_packages+.
+   #
++  # [+dynamic+]
++  #   When +false+, modules with +preload: :static_only+ are excluded from preloading.
++  #   This prevents Safari 15 SRI cache collision bugs with es-module-shims for dynamically
++  #   imported modules (e.g., React.lazy). Defaults to +true+.
++  #
+   # ==== Returns
+   #
+   # A hash where:
+@@ -134,9 +143,12 @@ class Importmap::Map
+   #
+   #   # Use a custom cache key for different asset hosts
+   #   packages = importmap.preloaded_module_packages(resolver: helpers, cache_key: "cdn_host")
+-  def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages)
++  #
++  #   # Exclude static-only modules (Safari 15 SRI workaround)
++  #   packages = importmap.preloaded_module_packages(resolver: helpers, dynamic: false)
++  def preloaded_module_packages(resolver:, entry_point: "application", cache_key: :preloaded_module_packages, dynamic: true)
+     cache_as(cache_key) do
+-      expanded_preloading_packages_and_directories(entry_point:).filter_map do |_, package|
++      expanded_preloading_packages_and_directories(entry_point:, dynamic: dynamic).filter_map do |_, package|
+         resolved_path = resolve_asset_path(package.path, resolver: resolver)
+         next unless resolved_path
+ 
+@@ -264,8 +276,18 @@ class Importmap::Map
+       end
+     end
+ 
+-    def expanded_preloading_packages_and_directories(entry_point:)
+-      expanded_packages_and_directories.select { |name, mapping| mapping.preload.in?([true, false]) ? mapping.preload : (Array(mapping.preload) & Array(entry_point)).any? }
++    def expanded_preloading_packages_and_directories(entry_point:, dynamic: true)
++      expanded_packages_and_directories.select do |name, mapping|
++        preload_value = mapping.preload
++        case preload_value
++        when true, false
++          preload_value
++        when :static_only
++          dynamic
++        else
++          (Array(preload_value) & Array(entry_point)).any?
++        end
++      end
+     end
+ 
+     def expanded_packages_and_directories
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..864df07 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,51 @@
++// Safari 15 SRI fallback: When es-module-shims fails to load a module due to SRI
++// cache collision (TypeError: Load failed with no stack), this interceptor retries
++// the fetch with cache: "reload" to bypass the poisoned preload cache.
++//
++// Root cause: Safari 15 natively preloads <link rel="modulepreload"> without SRI,
++// then es-module-shims tries to validate the cached response against the importmap's
++// SRI hash, causing a silent failure.
++
++(function() {
++  const isSafari15 = /^((?!chrome|android).)*safari/i.test(navigator.userAgent) &&
++    /Version\/15\.\d+/.test(navigator.userAgent);
++
++  if (!isSafari15) return;
++
++  const originalImport = window.importShim || window.import;
++
++  async function safari15SafeImport(modulePath, maxRetries = 2) {
++    for (let attempt = 0; attempt <= maxRetries; attempt++) {
++      try {
++        const fetchOptions = attempt > 0 ? { cache: "reload" } : {};
++        return await (window.importShim || window.import)(modulePath, fetchOptions);
++      } catch (error) {
++        const isSriFailure = error instanceof TypeError &&
++          error.message === "Load failed" &&
++          !error.stack;
++
++        if (!isSriFailure || attempt === maxRetries) {
++          throw error;
++        }
++
++        console.warn(
++          `[Safari 15 SRI Workaround] Retry ${attempt + 1}/${maxRetries} for ${modulePath} with cache:reload`
++        );
++      }
++    }
++  }
++
++  // Patch React.lazy and other dynamic import wrappers
++  const originalLazy = window.React?.lazy;
++  if (originalLazy) {
++    window.React.lazy = function(factory) {
++      return originalLazy(async () => {
++        const result = await factory();
++        return result;
++      });
++    };
++  }
++
++  // Expose safe import helper for application code
++  window.safari15SafeImport = safari15SafeImport;
++})();
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..82d0627 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,6 +7,11 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++
++    <%# Safari 15 SRI workaround: detect Safari 15 and pass dynamic: false to exclude
++        :static_only modules from preloading, preventing cache collision with es-module-shims %>
++    <% safari15 = request&.user_agent.to_s.match?(/Version\/15\.\d+.*Safari/) %>
++    <%= javascript_importmap_tags "application", dynamic: !safari15 %>
+   </head>
+ 
+   <body>
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..4b6a1ae 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -43,12 +43,38 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+     assert_dom_equal(
+       %(
+         <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
+-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
++        <link rel="modulepreload" href="/rich_text.js" crossorigin="anonymous" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
+       ),
+       javascript_importmap_module_preload_tags
+     )
+   end
+ 
++  test "javascript_importmap_module_preload_tags without safari15_sri_workaround" do
++    assert_dom_equal(
++      %(
++        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
++        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
++      ),
++      javascript_importmap_module_preload_tags(safari15_sri_workaround: false)
++    )
++  end
++
++  test "javascript_importmap_module_preload_tags with dynamic: true includes static_only modules" do
++    importmap = Importmap::Map.new
++    importmap.pin "static_module", preload: :static_only
++    importmap.pin "dynamic_module", preload: true
++
++    # With dynamic: false (default), :static_only modules are excluded
++    preload_html_static = javascript_importmap_module_preload_tags(importmap, dynamic: false)
++    refute_includes preload_html_static, %{href="/static_module.js"}
++    assert_includes preload_html_static, %{href="/dynamic_module.js"}
++
++    # With dynamic: true, :static_only modules are included
++    preload_html_dynamic = javascript_importmap_module_preload_tags(importmap, dynamic: true)
++    assert_includes preload_html_dynamic, %{href="/static_module.js"}
++    assert_includes preload_html_dynamic, %{href="/dynamic_module.js"}
++  end
++
+   test "tags have no nonce if CSP is not configured" do
+     @request = FakeRequest.new
+ 
+diff --git a/test/importmap_test.rb b/test/importmap_test.rb
+index 007f1c2..cb45880 100644
+--- a/test/importmap_test.rb
++++ b/test/importmap_test.rb
+@@ -209,6 +209,26 @@ class ImportmapTest < ActiveSupport::TestCase
+     assert_no_match(/tinymce/, preloading_module_paths)
+   end
+ 
++  test "preloaded_module_paths with dynamic: false excludes static_only modules" do
++    importmap = Importmap::Map.new.tap do |map|
++      map.pin "static_module", to: "static.js", preload: :static_only
++      map.pin "dynamic_module", to: "dynamic.js", preload: true
++      map.pin "lazy_module", to: "lazy.js", preload: false
++    end
++
++    # With dynamic: true (default), :static_only modules are included
++    all_paths = importmap.preloaded_module_paths(resolver: ApplicationController.helpers, dynamic: true)
++    assert_includes all_paths, "/static.js"
++    assert_includes all_paths, "/dynamic.js"
++    refute_includes all_paths, "/lazy.js"
++
++    # With dynamic: false, :static_only modules are excluded (Safari 15 workaround)
++    static_only_paths = importmap.preloaded_module_paths(resolver: ApplicationController.helpers, dynamic: false)
++    refute_includes static_only_paths, "/static.js"
++    assert_includes static_only_paths, "/dynamic.js"
++    refute_includes static_only_paths, "/lazy.js"
++  end
++
+   test "preloaded modules are included in preload tags based on single entry_point provided" do
+     preloading_module_paths = @importmap.preloaded_module_paths(resolver: ApplicationController.helpers, entry_point: "alternate").to_s
+     assert_no_match(/leaflet/, preloading_module_paths)

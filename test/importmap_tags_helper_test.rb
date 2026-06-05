@@ -43,10 +43,36 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     assert_dom_equal(
       %(
         <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
+        <link rel="modulepreload" href="/rich_text.js" crossorigin="anonymous" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
       ),
       javascript_importmap_module_preload_tags
     )
+  end
+
+  test "javascript_importmap_module_preload_tags without safari15_sri_workaround" do
+    assert_dom_equal(
+      %(
+        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
+        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
+      ),
+      javascript_importmap_module_preload_tags(safari15_sri_workaround: false)
+    )
+  end
+
+  test "javascript_importmap_module_preload_tags with dynamic: true includes static_only modules" do
+    importmap = Importmap::Map.new
+    importmap.pin "static_module", preload: :static_only
+    importmap.pin "dynamic_module", preload: true
+
+    # With dynamic: false (default), :static_only modules are excluded
+    preload_html_static = javascript_importmap_module_preload_tags(importmap, dynamic: false)
+    refute_includes preload_html_static, %{href="/static_module.js"}
+    assert_includes preload_html_static, %{href="/dynamic_module.js"}
+
+    # With dynamic: true, :static_only modules are included
+    preload_html_dynamic = javascript_importmap_module_preload_tags(importmap, dynamic: true)
+    assert_includes preload_html_dynamic, %{href="/static_module.js"}
+    assert_includes preload_html_dynamic, %{href="/dynamic_module.js"}
   end
 
   test "tags have no nonce if CSP is not configured" do

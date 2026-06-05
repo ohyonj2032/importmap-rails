@@ -7,6 +7,11 @@
     <%= csp_meta_tag %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+
+    <%# Safari 15 SRI workaround: detect Safari 15 and pass dynamic: false to exclude
+        :static_only modules from preloading, preventing cache collision with es-module-shims %>
+    <% safari15 = request&.user_agent.to_s.match?(/Version\/15\.\d+.*Safari/) %>
+    <%= javascript_importmap_tags "application", dynamic: !safari15 %>
   </head>
 
   <body>
