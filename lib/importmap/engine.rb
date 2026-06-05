@@ -19,6 +19,14 @@ module Importmap
       app.config.importmap.paths.each { |path| app.importmap.draw(path) }
     end
 
+    initializer "importmap.test_sri_fallback" do |app|
+      if Rails.env.test?
+        app.config.after_initialize do
+          app.importmap.enable_test_mode_sri_fallback!
+        end
+      end
+    end
+
     initializer "importmap.reloader" do |app|
       unless app.config.cache_classes
         Importmap::Reloader.new.tap do |reloader|

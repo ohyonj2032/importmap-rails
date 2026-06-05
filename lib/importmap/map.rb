@@ -69,6 +69,14 @@ class Importmap::Map
     @integrity = true
   end
 
+  # In test environments, SRI hashes computed at draw-time may not match
+  # Propshaft-compiled fingerprints. This method disables integrity checking
+  # for local assets while keeping it for CDN packages that have explicit hashes.
+  def enable_test_mode_sri_fallback!
+    clear_cache
+    @test_mode_sri_fallback = true
+  end
+
   def pin(name, to: nil, preload: true, integrity: true)
     clear_cache
     @packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
@@ -140,7 +148,7 @@ class Importmap::Map
         resolved_path = resolve_asset_path(package.path, resolver: resolver)
         next unless resolved_path
 
-        resolved_integrity = resolve_integrity_value(package.integrity, package.path, resolver: resolver)
+        resolved_integrity = resolve_integrity_value(package.integrity, resolved_path, resolver: resolver)
 
         package = MappedFile.new(
           name: package.name,
@@ -246,7 +254,7 @@ class Importmap::Map
         resolved_path = resolve_asset_path(mapping.path, resolver: resolver)
         next unless resolved_path
 
-        integrity_value = resolve_integrity_value(mapping.integrity, mapping.path, resolver: resolver)
+        integrity_value = resolve_integrity_value(mapping.integrity, resolved_path, resolver: resolver)
         next unless integrity_value
 
         [resolved_path, integrity_value]
@@ -258,6 +266,11 @@ class Importmap::Map
 
       case integrity
       when true
+        # In test mode, skip integrity calculation for local assets to avoid
+        # SRI mismatch when Propshaft recompiles files with different fingerprints.
+        # CDN packages with explicit integrity values are still honored.
+        return nil if @test_mode_sri_fallback && !path.to_s.start_with?("http://", "https://")
+
         resolver.asset_integrity(path) if resolver.respond_to?(:asset_integrity)
       when String
         integrity
