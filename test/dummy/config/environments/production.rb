@@ -23,6 +23,15 @@ Rails.application.configure do
   # Disable serving static files from the `/public` folder by default since
   # Apache or NGINX already handles this.
   config.public_file_server.enabled = ENV['RAILS_SERVE_STATIC_FILES'].present?
+  
+  # 配置静态文件的客户端缓存控制策略 (结合 Importmap 的 digest)
+  config.public_file_server.headers = {
+    "Cache-Control" => "public, max-age=#{1.year.to_i}"
+  }
+
+  # 启用 Importmap 的 digest 功能，协同服务端和客户端缓存
+  config.importmap.sweep_cache = true
+  config.importmap.digest = true
 
   # Compress CSS using a preprocessor.
   # config.assets.css_compressor = :sass

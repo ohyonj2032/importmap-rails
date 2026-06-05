@@ -7,6 +7,12 @@
     <%= csp_meta_tag %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+    
+    <!-- 针对 Safari iOS 15 等旧版浏览器的 Importmap 支持 polyfill -->
+    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+    
+    <!-- 输出 Importmap 配置和入口应用 -->
+    <%= javascript_importmap_tags "application" %>
   </head>
 
   <body>
