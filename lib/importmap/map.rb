@@ -14,6 +14,7 @@ class Importmap::Map
   def initialize
     @integrity = false
     @packages, @directories = {}, {}
+    @dynamic_cdn_modules = {}
     @cache = {}
   end
 
@@ -77,6 +78,41 @@ class Importmap::Map
   def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true)
     clear_cache
     @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
+  end
+
+  def pin_cdn(name, url:, preload: false, integrity: nil, lazy: true)
+    clear_cache
+    @dynamic_cdn_modules[name] = {
+      url: url,
+      preload: preload,
+      integrity: integrity,
+      lazy: lazy,
+      local: false
+    }
+  end
+
+  def dynamic_cdn_modules
+    @dynamic_cdn_modules.dup
+  end
+
+  def dynamic_cdn_module(name)
+    @dynamic_cdn_modules[name]
+  end
+
+  def compute_dynamic_sri!(algorithm: "sha384")
+    verifier = Importmap::SriVerifier.new
+    @dynamic_cdn_modules.each do |name, config|
+      next if config[:integrity]
+      next if config[:local]
+
+      begin
+        computed = verifier.compute_sri_for_url(config[:url], algorithm: algorithm)
+        @dynamic_cdn_modules[name] = config.merge(integrity: computed)
+      rescue => e
+        Rails.logger.warn "Importmap: Could not compute SRI for CDN module #{name}: #{e.message}"
+      end
+    end
+    clear_cache
   end
 
   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to

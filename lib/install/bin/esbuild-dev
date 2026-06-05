@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+TS_SOURCE_DIR="${TS_SOURCE_DIR:-app/javascript}"
+BUILD_DIR="${BUILD_DIR:-app/assets/builds}"
+ENTRY_POINTS="${ENTRY_POINTS:-}"
+ESBUILD_CONFIG="${ESBUILD_CONFIG:-config/esbuild.config.mjs}"
+
+if [ ! -d "$TS_SOURCE_DIR" ]; then
+  echo "Error: TypeScript source directory '$TS_SOURCE_DIR' not found"
+  exit 1
+fi
+
+mkdir -p "$BUILD_DIR"
+
+has_ts_files() {
+  find "$TS_SOURCE_DIR" -name "*.ts" -o -name "*.tsx" 2>/dev/null | head -1 | grep -q .
+}
+
+if ! has_ts_files; then
+  echo "No TypeScript files found in $TS_SOURCE_DIR. Exiting."
+  exit 0
+fi
+
+if [ -z "$ENTRY_POINTS" ]; then
+  ENTRY_POINTS=$(find "$TS_SOURCE_DIR" -name "*.ts" -o -name "*.tsx" | grep -v '\.d\.ts$' | grep -v '__tests__' | grep -v '\.test\.' | grep -v '\.spec\.' | sed "s|^$TS_SOURCE_DIR/||" | tr '\n' ' ')
+fi
+
+if [ -z "$ENTRY_POINTS" ]; then
+  echo "No entry points found. Exiting."
+  exit 0
+fi
+
+echo "TypeScript source: $TS_SOURCE_DIR"
+echo "Build output:      $BUILD_DIR"
+echo "Entry points:      $ENTRY_POINTS"
+echo ""
+
+build_args=()
+for entry in $ENTRY_POINTS; do
+  build_args+=("$TS_SOURCE_DIR/$entry")
+done
+
+if [ "$1" = "--watch" ]; then
+  echo "Starting esbuild in watch mode..."
+  exec npx esbuild "${build_args[@]}" \
+    --bundle=false \
+    --format=esm \
+    --outdir="$BUILD_DIR" \
+    --sourcemap \
+    --watch \
+    --log-level=info
+else
+  echo "Building TypeScript with esbuild..."
+  exec npx esbuild "${build_args[@]}" \
+    --bundle=false \
+    --format=esm \
+    --outdir="$BUILD_DIR" \
+    --sourcemap \
+    --log-level=info
+fi

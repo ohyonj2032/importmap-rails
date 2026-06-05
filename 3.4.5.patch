@@ -1,0 +1,206 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..e521b56 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,40 +1,45 @@
+ module Importmap::ImportmapTagsHelper
+-  # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+   def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
+-    safe_join [
++    tags = [
+       javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
+       javascript_importmap_module_preload_tags(importmap, entry_point:),
+       javascript_import_module_tag(entry_point)
+-    ], "\n"
++    ]
++
++    if Rails.application.config.importmap.hmr_enabled && Rails.env.development?
++      tags.unshift(javascript_hmr_meta_tags)
++    end
++
++    safe_join tags, "\n"
+   end
+ 
+-  # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+-  # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+   def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
+     tag.script importmap_json.html_safe,
+       type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
+   end
+ 
+-  # Import a named JavaScript module(s) using a script-module tag.
+   def javascript_import_module_tag(*module_names)
+     imports = Array(module_names).collect { |m| %(import "#{m}") }.join("\n")
+     tag.script imports.html_safe, type: "module", nonce: request&.content_security_policy_nonce
+   end
+ 
+-  # Link tags for preloading all modules marked as preload: true in the `importmap`
+-  # (defaults to Rails.application.importmap), such that they'll be fetched
+-  # in advance by browsers supporting this link type (https://caniuse.com/?search=modulepreload).
+   def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application")
+     packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point)
+ 
+     _generate_preload_tags(packages) { |path, package| [path, { integrity: package.integrity }] }
+   end
+ 
+-  # Link tag(s) for preloading the JavaScript module residing in `*paths`. Will return one link tag per path element.
+   def javascript_module_preload_tag(*paths)
+     _generate_preload_tags(paths) { |path| [path, {}] }
+   end
+ 
++  def javascript_hmr_meta_tags
++    safe_join [
++      tag.meta(name: "hmr-enabled", content: "true"),
++      tag.meta(name: "hmr-port", content: Rails.application.config.importmap.hmr_port.to_s)
++    ], "\n"
++  end
++
+   private
+     def _generate_preload_tags(items)
+       content_security_policy_nonce = request&.content_security_policy_nonce
+diff --git a/lib/importmap-rails.rb b/lib/importmap-rails.rb
+index 4de63ca..99faa73 100644
+--- a/lib/importmap-rails.rb
++++ b/lib/importmap-rails.rb
+@@ -3,4 +3,6 @@ end
+ 
+ require "importmap/version"
+ require "importmap/reloader"
++require "importmap/sri_verifier"
++require "importmap/propshaft_cache_middleware"
+ require "importmap/engine" if defined?(Rails::Railtie)
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..e611c65 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -1,6 +1,5 @@
+ require "importmap/map"
+ 
+-# Use Rails.application.importmap to access the map
+ Rails::Application.send(:attr_accessor, :importmap)
+ 
+ module Importmap
+@@ -10,6 +9,14 @@ module Importmap
+     config.importmap.sweep_cache = Rails.env.development? || Rails.env.test?
+     config.importmap.cache_sweepers = []
+     config.importmap.rescuable_asset_errors = []
++    config.importmap.typescript_source_dir = "app/javascript"
++    config.importmap.typescript_build_dir = "app/assets/builds"
++    config.importmap.typescript_enabled = false
++    config.importmap.dynamic_cdn_modules = {}
++    config.importmap.sri_algorithm = "sha384"
++    config.importmap.sri_auto_compute = false
++    config.importmap.hmr_enabled = false
++    config.importmap.hmr_port = 3099
+ 
+     config.autoload_once_paths = %W( #{root}/app/helpers #{root}/app/controllers )
+ 
+@@ -33,6 +40,12 @@ module Importmap
+       if app.config.importmap.sweep_cache && !app.config.cache_classes
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
++
++        if app.config.importmap.typescript_enabled
++          builds_path = app.root.join(app.config.importmap.typescript_build_dir)
++          app.config.importmap.cache_sweepers << builds_path if Dir.exist?(builds_path)
++        end
++
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+@@ -45,6 +58,11 @@ module Importmap
+       if app.config.respond_to?(:assets)
+         app.config.assets.paths << Rails.root.join("app/javascript")
+         app.config.assets.paths << Rails.root.join("vendor/javascript")
++
++        if app.config.importmap.typescript_enabled
++          builds_path = Rails.root.join(app.config.importmap.typescript_build_dir)
++          app.config.assets.paths << builds_path if Dir.exist?(builds_path)
++        end
+       end
+     end
+ 
+@@ -57,6 +75,29 @@ module Importmap
+     initializer "importmap.helpers" do
+       ActiveSupport.on_load(:action_controller_base) do
+         helper Importmap::ImportmapTagsHelper
++        helper Importmap::DynamicImportmapHelper
++      end
++    end
++
++    initializer "importmap.dynamic_cdn" do |app|
++      app.config.importmap.dynamic_cdn_modules.each do |name, config|
++        app.importmap.pin_cdn(
++          name,
++          url: config[:url],
++          preload: config[:preload] || false,
++          integrity: config[:integrity],
++          lazy: config.fetch(:lazy, true)
++        )
++      end
++
++      if app.config.importmap.sri_auto_compute && !Rails.env.development?
++        app.importmap.compute_dynamic_sri!(algorithm: app.config.importmap.sri_algorithm)
++      end
++    end
++
++    initializer "importmap.hmr" do |app|
++      if app.config.importmap.hmr_enabled && Rails.env.development?
++        app.config.middleware.use Importmap::PropshaftCacheMiddleware
+       end
+     end
+ 
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..6563a88 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -14,6 +14,7 @@ class Importmap::Map
+   def initialize
+     @integrity = false
+     @packages, @directories = {}, {}
++    @dynamic_cdn_modules = {}
+     @cache = {}
+   end
+ 
+@@ -79,6 +80,41 @@ class Importmap::Map
+     @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
+   end
+ 
++  def pin_cdn(name, url:, preload: false, integrity: nil, lazy: true)
++    clear_cache
++    @dynamic_cdn_modules[name] = {
++      url: url,
++      preload: preload,
++      integrity: integrity,
++      lazy: lazy,
++      local: false
++    }
++  end
++
++  def dynamic_cdn_modules
++    @dynamic_cdn_modules.dup
++  end
++
++  def dynamic_cdn_module(name)
++    @dynamic_cdn_modules[name]
++  end
++
++  def compute_dynamic_sri!(algorithm: "sha384")
++    verifier = Importmap::SriVerifier.new
++    @dynamic_cdn_modules.each do |name, config|
++      next if config[:integrity]
++      next if config[:local]
++
++      begin
++        computed = verifier.compute_sri_for_url(config[:url], algorithm: algorithm)
++        @dynamic_cdn_modules[name] = config.merge(integrity: computed)
++      rescue => e
++        Rails.logger.warn "Importmap: Could not compute SRI for CDN module #{name}: #{e.message}"
++      end
++    end
++    clear_cache
++  end
++
+   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
+   # `path_to_asset`, such as `ActionController::Base.helpers` or `ApplicationController.helpers`. You'll want to use the
+   # resolver that has been configured for the `asset_host` you want these resolved paths to use. In case you need to
