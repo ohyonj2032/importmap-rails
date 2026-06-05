@@ -1,0 +1,34 @@
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -11,6 +11,15 @@
+   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+   def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
++    if request&.user_agent =~ /Version\/15\..*Safari/ && request&.user_agent !~ /Chrome/
++      begin
++        parsed = JSON.parse(importmap_json)
++        parsed.delete("integrity")
++        parsed.delete("integrities")
++        importmap_json = parsed.to_json
++      rescue JSON::ParserError
++      end
++    end
++
+     tag.script importmap_json.html_safe,
+       type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
+   end
+@@ -25,7 +34,13 @@
+   def javascript_importmap_module_preload_tags(importmap = Rails.application.importmap, entry_point: "application")
+     packages = importmap.preloaded_module_packages(resolver: self, entry_point:, cache_key: entry_point)
+ 
+-    _generate_preload_tags(packages) { |path, package| [path, { integrity: package.integrity }] }
++    _generate_preload_tags(packages) do |path, package|
++      if request&.user_agent =~ /Version\/15\..*Safari/ && request&.user_agent !~ /Chrome/
++        [path, {}]
++      else
++        [path, { integrity: package.integrity }]
++      end
++    end
+   end
+ 
+   # Link tag(s) for preloading the JavaScript module residing in `*paths`. Will return one link tag per path element.
