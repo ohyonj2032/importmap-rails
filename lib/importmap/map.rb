@@ -193,6 +193,12 @@ class Importmap::Map
     end
   end
 
+  # Clears the internal cache. Used by the cache sweeper to ensure
+  # integrity hashes are recalculated when source files change.
+  def clear_cache
+    @cache.clear
+  end
+
   private
     MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, keyword_init: true)
     MappedFile = Struct.new(:name, :path, :preload, :integrity, keyword_init: true)
@@ -203,10 +209,6 @@ class Importmap::Map
       else
         @cache[name.to_s] = yield
       end
-    end
-
-    def clear_cache
-      @cache.clear
     end
 
     def rescuable_asset_error?(error)
@@ -254,10 +256,9 @@ class Importmap::Map
     end
 
     def resolve_integrity_value(integrity, path, resolver:)
-      return unless @integrity
-
       case integrity
       when true
+        return unless @integrity
         resolver.asset_integrity(path) if resolver.respond_to?(:asset_integrity)
       when String
         integrity

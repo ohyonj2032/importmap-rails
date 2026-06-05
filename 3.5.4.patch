@@ -1,0 +1,101 @@
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..34b881b 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -30,7 +30,7 @@ module Importmap
+     end
+ 
+     initializer "importmap.cache_sweeper" do |app|
+-      if app.config.importmap.sweep_cache && !app.config.cache_classes
++      if app.config.importmap.sweep_cache
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..b1dfcd8 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -193,6 +193,12 @@ class Importmap::Map
+     end
+   end
+ 
++  # Clears the internal cache. Used by the cache sweeper to ensure
++  # integrity hashes are recalculated when source files change.
++  def clear_cache
++    @cache.clear
++  end
++
+   private
+     MappedDir  = Struct.new(:dir, :path, :under, :preload, :integrity, keyword_init: true)
+     MappedFile = Struct.new(:name, :path, :preload, :integrity, keyword_init: true)
+@@ -205,10 +211,6 @@ class Importmap::Map
+       end
+     end
+ 
+-    def clear_cache
+-      @cache.clear
+-    end
+-
+     def rescuable_asset_error?(error)
+       Rails.application.config.importmap.rescuable_asset_errors.any? { |e| error.is_a?(e) }
+     end
+@@ -254,10 +256,9 @@ class Importmap::Map
+     end
+ 
+     def resolve_integrity_value(integrity, path, resolver:)
+-      return unless @integrity
+-
+       case integrity
+       when true
++        return unless @integrity
+         resolver.asset_integrity(path) if resolver.respond_to?(:asset_integrity)
+       when String
+         integrity
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..9d594db 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,6 +7,13 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++    <script async src="https://ga.jspm.io/npm:es-module-shims@1.10.0/dist/es-module-shims.js"></script>
++    <script type="esms-options">
++    {
++      "shimMode": true
++    }
++    </script>
++    <%= javascript_importmap_tags %>
+   </head>
+ 
+   <body>
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..dda9225 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,4 +1,4 @@
+-enable_integrity!
++enable_integrity! unless Rails.env.test?
+ 
+ pin_all_from "app/assets/javascripts"
+ 
+diff --git a/test/dummy/config/initializers/assets.rb b/test/dummy/config/initializers/assets.rb
+index 8edcc35..c2bb4d8 100644
+--- a/test/dummy/config/initializers/assets.rb
++++ b/test/dummy/config/initializers/assets.rb
+@@ -13,3 +13,15 @@ Rails.application.config.assets.paths << Rails.root.join("app/components")
+ # Rails.application.config.assets.precompile += %w( admin.js admin.css )
+ 
+ Rails.application.config.assets.integrity_hash_algorithm = "sha384"
++
++Rails.application.config.after_initialize do
++  if defined?(Propshaft) && Rails.application.config.importmap.sweep_cache
++    Propshaft::Assembly.prepend(Module.new do
++      def compilers
++        super.tap do
++          Rails.application.importmap.clear_cache if Rails.application.try(:importmap)
++        end
++      end
++    end)
++  end
++end

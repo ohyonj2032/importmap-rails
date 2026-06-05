@@ -13,3 +13,15 @@ Rails.application.config.assets.paths << Rails.root.join("app/components")
 # Rails.application.config.assets.precompile += %w( admin.js admin.css )
 
 Rails.application.config.assets.integrity_hash_algorithm = "sha384"
+
+Rails.application.config.after_initialize do
+  if defined?(Propshaft) && Rails.application.config.importmap.sweep_cache
+    Propshaft::Assembly.prepend(Module.new do
+      def compilers
+        super.tap do
+          Rails.application.importmap.clear_cache if Rails.application.try(:importmap)
+        end
+      end
+    end)
+  end
+end

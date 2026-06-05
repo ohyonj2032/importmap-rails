@@ -1,4 +1,4 @@
-enable_integrity!
+enable_integrity! unless Rails.env.test?
 
 pin_all_from "app/assets/javascripts"
 

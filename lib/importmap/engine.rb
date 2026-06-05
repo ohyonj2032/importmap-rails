@@ -30,7 +30,7 @@ module Importmap
     end
 
     initializer "importmap.cache_sweeper" do |app|
-      if app.config.importmap.sweep_cache && !app.config.cache_classes
+      if app.config.importmap.sweep_cache
         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
