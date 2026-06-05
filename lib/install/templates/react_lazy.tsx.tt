@@ -1,0 +1,67 @@
+import React, { Suspense, lazy } from 'react';
+
+declare global {
+  interface Window {
+    Importmap?: {
+      loadReactLazy: (name: string, url: string, integrity?: string) => void;
+    };
+  }
+}
+
+interface LazyLoadOptions {
+  name: string;
+  url: string;
+  integrity?: string;
+  fallback?: React.ReactNode;
+}
+
+export function createLazyComponent({ name, url, integrity, fallback }: LazyLoadOptions) {
+  if (window.Importmap) {
+    window.Importmap.loadReactLazy(name, url, integrity);
+  }
+
+  const LazyComponent = lazy(() => 
+    import(/* @vite-ignore */ name).catch(() => ({
+      default: () => <div>Failed to load component</div>
+    }))
+  );
+
+  return function LazyComponentWrapper(props: any) {
+    return (
+      <Suspense fallback={fallback || <div>Loading...</div>}>
+        <LazyComponent {...props} />
+      </Suspense>
+    );
+  };
+}
+
+export function useDynamicImport(name: string, url: string, integrity?: string) {
+  const [module, setModule] = React.useState<any>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<Error | null>(null);
+
+  React.useEffect(() => {
+    async function load() {
+      try {
+        setLoading(true);
+        setError(null);
+        if (window.Importmap) {
+          const loaded = await window.Importmap.loadDynamic(name, url, integrity);
+          setModule(loaded);
+        } else {
+          const loaded = await import(/* @vite-ignore */ name);
+          setModule(loaded);
+        }
+      } catch (err) {
+        setError(err as Error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, [name, url, integrity]);
+
+  return { module, loading, error };
+}
+
+export default createLazyComponent;

@@ -1,0 +1,54 @@
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import createLazyComponent, { useDynamicImport } from './react_lazy';
+
+const DataGrid = createLazyComponent({
+  name: 'react-data-grid',
+  url: 'https://ga.jspm.io/npm:react-data-grid@7.0.0-beta.44/lib/index.js',
+  integrity: 'sha384-placeholder',
+  fallback: <div>Loading DataGrid...</div>
+});
+
+function App() {
+  const { module: dateFns, loading, error } = useDynamicImport(
+    'date-fns',
+    'https://ga.jspm.io/npm:date-fns@3.3.1/index.js'
+  );
+
+  const columns = [
+    { key: 'id', name: 'ID' },
+    { key: 'name', name: 'Name' },
+    { key: 'age', name: 'Age' }
+  ];
+
+  const rows = [
+    { id: 1, name: 'Alice', age: 28 },
+    { id: 2, name: 'Bob', age: 32 },
+    { id: 3, name: 'Charlie', age: 25 }
+  ];
+
+  return (
+    <div style={{ padding: '20px' }}>
+      <h1>React with Importmap</h1>
+      
+      {loading && <div>Loading date-fns...</div>}
+      {error && <div>Error: {error.message}</div>}
+      {dateFns && (
+        <div>
+          Today: {dateFns.format(new Date(), 'MMMM d, yyyy')}
+        </div>
+      )}
+      
+      <h2>Data Grid Example</h2>
+      <DataGrid columns={columns} rows={rows} style={{ height: 400 }} />
+    </div>
+  );
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const container = document.getElementById('react-root');
+  if (container) {
+    const root = createRoot(container);
+    root.render(<App />);
+  }
+});

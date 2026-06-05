@@ -1,0 +1,42 @@
+const esbuild = require('esbuild');
+const path = require('path');
+
+const isDev = process.env.NODE_ENV !== 'production';
+
+const config = {
+  entryPoints: [
+    'app/frontend/application.tsx',
+    'app/frontend/**/*.{ts,tsx,js,jsx}'
+  ],
+  bundle: true,
+  format: 'esm',
+  outdir: 'app/assets/builds',
+  sourcemap: isDev,
+  minify: !isDev,
+  splitting: true,
+  target: ['es2020', 'chrome89', 'firefox89', 'safari15'],
+  platform: 'browser',
+  plugins: [],
+  external: [
+    'react',
+    'react-dom',
+    'react-dom/client',
+    'react-data-grid',
+    'react-data-grid/lib/styles.css'
+  ]
+};
+
+if (process.argv.includes('--watch')) {
+  esbuild.context(config).then((ctx) => {
+    ctx.watch();
+    console.log('⚡ esbuild watching for changes...');
+  }).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+} else {
+  esbuild.build(config).catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

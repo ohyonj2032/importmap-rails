@@ -1,0 +1,262 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..a2ef850 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -1,10 +1,11 @@
+ module Importmap::ImportmapTagsHelper
+   # Setup all script tags needed to use an importmap-powered entrypoint (which defaults to application.js)
+-  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap)
++  def javascript_importmap_tags(entry_point = "application", importmap: Rails.application.importmap, dynamic_packages: {})
+     safe_join [
+-      javascript_inline_importmap_tag(importmap.to_json(resolver: self)),
++      javascript_inline_importmap_tag(importmap.to_json_with_dynamics(dynamic_packages, resolver: self)),
+       javascript_importmap_module_preload_tags(importmap, entry_point:),
+-      javascript_import_module_tag(entry_point)
++      javascript_import_module_tag(entry_point),
++      javascript_dynamic_importmap_loader_tag
+     ], "\n"
+   end
+ 
+@@ -15,6 +16,12 @@ module Importmap::ImportmapTagsHelper
+       type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
+   end
+ 
++  # Generate a dynamic importmap tag with additional packages
++  def javascript_inline_dynamic_importmap_tag(dynamic_packages = {}, importmap: Rails.application.importmap)
++    tag.script importmap.to_json_with_dynamics(dynamic_packages, resolver: self).html_safe,
++      type: "importmap", "data-turbo-track": "reload", "data-dynamic": "true", nonce: request&.content_security_policy_nonce
++  end
++
+   # Import a named JavaScript module(s) using a script-module tag.
+   def javascript_import_module_tag(*module_names)
+     imports = Array(module_names).collect { |m| %(import "#{m}") }.join("\n")
+@@ -35,6 +42,54 @@ module Importmap::ImportmapTagsHelper
+     _generate_preload_tags(paths) { |path| [path, {}] }
+   end
+ 
++  # Generate a dynamic importmap loader script that supports runtime importmap injection
++  def javascript_dynamic_importmap_loader_tag
++    tag.script <<~JS.html_safe, type: "module", nonce: request&.content_security_policy_nonce
++      window.Importmap = {
++        inject: function(map) {
++          const script = document.createElement('script');
++          script.type = 'importmap';
++          script.textContent = JSON.stringify(map);
++          document.currentScript.after(script);
++        },
++        
++        loadDynamic: async function(name, url, integrity) {
++          const map = { imports: {} };
++          if (integrity) {
++            map.integrity = {};
++            map.integrity[url] = integrity;
++          }
++          map.imports[name] = url;
++          this.inject(map);
++          return import(name);
++        },
++        
++        loadReactLazy: function(name, url, integrity) {
++          const map = { imports: {} };
++          if (integrity) {
++            map.integrity = {};
++            map.integrity[url] = integrity;
++          }
++          map.imports[name] = url;
++          this.inject(map);
++        },
++        
++        // Safari iOS 15 compatible dynamic import wrapper
++        safeDynamicImport: async function(name) {
++          try {
++            return await import(name);
++          } catch (e) {
++            if (e.message.includes('is not defined') || e.name === 'TypeError') {
++              console.warn('Module not found in importmap, retrying:', name);
++              return null;
++            }
++            throw e;
++          }
++        }
++      };
++    JS
++  end
++
+   private
+     def _generate_preload_tags(items)
+       content_security_policy_nonce = request&.content_security_policy_nonce
+diff --git a/lib/importmap-rails.rb b/lib/importmap-rails.rb
+index 4de63ca..4e7e52f 100644
+--- a/lib/importmap-rails.rb
++++ b/lib/importmap-rails.rb
+@@ -3,4 +3,5 @@ end
+ 
+ require "importmap/version"
+ require "importmap/reloader"
++require "importmap/sri"
+ require "importmap/engine" if defined?(Rails::Railtie)
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..763b7de 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -33,6 +33,8 @@ module Importmap
+       if app.config.importmap.sweep_cache && !app.config.cache_classes
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
++        app.config.importmap.cache_sweepers << app.root.join("app/assets/builds")
++        app.config.importmap.cache_sweepers << app.root.join("app/frontend")
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+@@ -45,6 +47,7 @@ module Importmap
+       if app.config.respond_to?(:assets)
+         app.config.assets.paths << Rails.root.join("app/javascript")
+         app.config.assets.paths << Rails.root.join("vendor/javascript")
++        app.config.assets.paths << Rails.root.join("app/assets/builds")
+       end
+     end
+ 
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..21debd3 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -14,6 +14,7 @@ class Importmap::Map
+   def initialize
+     @integrity = false
+     @packages, @directories = {}, {}
++    @dynamic_packages = {}
+     @cache = {}
+   end
+ 
+@@ -79,6 +80,31 @@ class Importmap::Map
+     @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
+   end
+ 
++  def pin_dynamic(name, to: nil, preload: false, integrity: nil)
++    clear_cache
++    @dynamic_packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
++  end
++
++  def dynamic_import(name, url, integrity: nil)
++    clear_cache
++    @dynamic_packages[name] = MappedFile.new(name: name, path: url, preload: false, integrity: integrity)
++  end
++
++  def build_import_map_with_dynamics(dynamic_packages = {}, resolver:)
++    static_map = build_import_map(expanded_packages_and_directories, resolver: resolver)
++    dynamic_map = build_dynamic_import_map(dynamic_packages, resolver: resolver)
++    
++    static_map["imports"].merge!(dynamic_map["imports"]) if dynamic_map["imports"]
++    static_map["integrity"].merge!(dynamic_map["integrity"]) if dynamic_map["integrity"]
++    static_map
++  end
++
++  def to_json_with_dynamics(dynamic_packages = {}, resolver:, cache_key: :json_with_dynamics)
++    cache_as(cache_key) do
++      JSON.pretty_generate(build_import_map_with_dynamics(dynamic_packages, resolver: resolver))
++    end
++  end
++
+   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
+   # `path_to_asset`, such as `ActionController::Base.helpers` or `ApplicationController.helpers`. You'll want to use the
+   # resolver that has been configured for the `asset_host` you want these resolved paths to use. In case you need to
+@@ -239,6 +265,26 @@ class Importmap::Map
+       map
+     end
+ 
++    def build_dynamic_import_map(dynamic_packages_hash, resolver:)
++      dynamic_packages = dynamic_packages_hash.transform_values do |pkg|
++        if pkg.is_a?(Hash)
++          MappedFile.new(
++            name: pkg[:name] || pkg["name"],
++            path: pkg[:url] || pkg["url"] || pkg[:to] || pkg["to"],
++            preload: pkg[:preload] || pkg["preload"] || false,
++            integrity: pkg[:integrity] || pkg["integrity"]
++          )
++        else
++          pkg
++        end
++      end
++
++      map = { "imports" => resolve_asset_paths(dynamic_packages, resolver: resolver) }
++      integrity = build_integrity_hash(dynamic_packages, resolver: resolver)
++      map["integrity"] = integrity unless integrity.empty?
++      map
++    end
++
+     def build_integrity_hash(packages, resolver:)
+       packages.filter_map do |name, mapping|
+         next unless mapping.integrity
+@@ -310,7 +356,7 @@ class Importmap::Map
+     end
+ 
+     def find_javascript_files_in_tree(path)
+-      Dir[path.join("**/*.js{,m}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
++      Dir[path.join("**/*.{js,mjs,ts,tsx}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
+     end
+ 
+     def absolute_root_of(path)
+diff --git a/lib/install/config/importmap.rb b/lib/install/config/importmap.rb
+index 0086a32..b099f2d 100644
+--- a/lib/install/config/importmap.rb
++++ b/lib/install/config/importmap.rb
+@@ -1,3 +1,27 @@
+ # Pin npm packages by running ./bin/importmap
++# Documentation: https://github.com/rails/importmap-rails
+ 
+ pin "application"
++
++# Enable automatic integrity hash calculation for all pinned modules
++enable_integrity!
++
++# Pin all JavaScript/TypeScript modules from app/assets/builds directory
++# This is where esbuild compiles your TypeScript files to ES modules
++pin_all_from "app/assets/builds", under: "builds"
++
++# Pin all JavaScript modules from app/javascript directory
++pin_all_from "app/javascript", under: "javascript"
++
++# Example: Pin React 18 from JSPM CDN
++pin "react", to: "https://ga.jspm.io/npm:react@18.2.0/index.js"
++pin "react-dom", to: "https://ga.jspm.io/npm:react-dom@18.2.0/index.js"
++pin "react-dom/client", to: "https://ga.jspm.io/npm:react-dom@18.2.0/client.js"
++
++# Example: Pin React Data Grid for lazy loading
++pin "react-data-grid", to: "https://ga.jspm.io/npm:react-data-grid@7.0.0-beta.44/lib/index.js"
++pin "react-data-grid/lib/styles.css", to: "https://ga.jspm.io/npm:react-data-grid@7.0.0-beta.44/lib/styles.css"
++
++# Example: Pin utility libraries
++pin "date-fns", to: "https://ga.jspm.io/npm:date-fns@3.3.1/index.js"
++
+diff --git a/lib/install/install.rb b/lib/install/install.rb
+index 03d8dcc..d204dc6 100644
+--- a/lib/install/install.rb
++++ b/lib/install/install.rb
+@@ -30,3 +30,27 @@ copy_file "#{__dir__}/config/importmap.rb", "config/importmap.rb"
+ say "Copying binstub"
+ copy_file "#{__dir__}/bin/importmap", "bin/importmap"
+ chmod "bin", 0755 & ~File.umask, verbose: false
++
++say "Setup TypeScript with esbuild (optional)"
++if yes?("Would you like to setup TypeScript with esbuild? (y/n)")
++  template "#{__dir__}/templates/package.json.tt", "package.json"
++  template "#{__dir__}/templates/tsconfig.json.tt", "tsconfig.json"
++  template "#{__dir__}/templates/Procfile.dev.tt", "Procfile.dev"
++  template "#{__dir__}/templates/esbuild.config.js.tt", "esbuild.config.js"
++  
++  empty_directory "app/frontend"
++  template "#{__dir__}/templates/react_lazy.tsx.tt", "app/frontend/react_lazy.tsx"
++  template "#{__dir__}/templates/application.tsx.tt", "app/frontend/application.tsx"
++  
++  empty_directory "app/assets/builds"
++  keep_file "app/assets/builds"
++  
++  gsub_file "config/importmap.rb", /pin_all_from "app\/javascript"/, 'pin_all_from "app/assets/builds"'
++  
++  if (sprockets_manifest_path = Rails.root.join("app/assets/config/manifest.js")).exist?
++    append_to_file sprockets_manifest_path, %(//= link_tree ../../assets/builds .js\n)
++  end
++  
++  append_to_file ".gitignore", "/app/assets/builds\n/node_modules\n"
++end
++

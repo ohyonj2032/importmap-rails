@@ -14,6 +14,7 @@ class Importmap::Map
   def initialize
     @integrity = false
     @packages, @directories = {}, {}
+    @dynamic_packages = {}
     @cache = {}
   end
 
@@ -77,6 +78,31 @@ class Importmap::Map
   def pin_all_from(dir, under: nil, to: nil, preload: true, integrity: true)
     clear_cache
     @directories[dir] = MappedDir.new(dir: dir, under: under, path: to, preload: preload, integrity: integrity)
+  end
+
+  def pin_dynamic(name, to: nil, preload: false, integrity: nil)
+    clear_cache
+    @dynamic_packages[name] = MappedFile.new(name: name, path: to || "#{name}.js", preload: preload, integrity: integrity)
+  end
+
+  def dynamic_import(name, url, integrity: nil)
+    clear_cache
+    @dynamic_packages[name] = MappedFile.new(name: name, path: url, preload: false, integrity: integrity)
+  end
+
+  def build_import_map_with_dynamics(dynamic_packages = {}, resolver:)
+    static_map = build_import_map(expanded_packages_and_directories, resolver: resolver)
+    dynamic_map = build_dynamic_import_map(dynamic_packages, resolver: resolver)
+    
+    static_map["imports"].merge!(dynamic_map["imports"]) if dynamic_map["imports"]
+    static_map["integrity"].merge!(dynamic_map["integrity"]) if dynamic_map["integrity"]
+    static_map
+  end
+
+  def to_json_with_dynamics(dynamic_packages = {}, resolver:, cache_key: :json_with_dynamics)
+    cache_as(cache_key) do
+      JSON.pretty_generate(build_import_map_with_dynamics(dynamic_packages, resolver: resolver))
+    end
   end
 
   # Returns an array of all the resolved module paths of the pinned packages. The `resolver` must respond to
@@ -239,6 +265,26 @@ class Importmap::Map
       map
     end
 
+    def build_dynamic_import_map(dynamic_packages_hash, resolver:)
+      dynamic_packages = dynamic_packages_hash.transform_values do |pkg|
+        if pkg.is_a?(Hash)
+          MappedFile.new(
+            name: pkg[:name] || pkg["name"],
+            path: pkg[:url] || pkg["url"] || pkg[:to] || pkg["to"],
+            preload: pkg[:preload] || pkg["preload"] || false,
+            integrity: pkg[:integrity] || pkg["integrity"]
+          )
+        else
+          pkg
+        end
+      end
+
+      map = { "imports" => resolve_asset_paths(dynamic_packages, resolver: resolver) }
+      integrity = build_integrity_hash(dynamic_packages, resolver: resolver)
+      map["integrity"] = integrity unless integrity.empty?
+      map
+    end
+
     def build_integrity_hash(packages, resolver:)
       packages.filter_map do |name, mapping|
         next unless mapping.integrity
@@ -310,7 +356,7 @@ class Importmap::Map
     end
 
     def find_javascript_files_in_tree(path)
-      Dir[path.join("**/*.js{,m}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
+      Dir[path.join("**/*.{js,mjs,ts,tsx}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
     end
 
     def absolute_root_of(path)
