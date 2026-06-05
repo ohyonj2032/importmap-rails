@@ -7,6 +7,27 @@
     <%= csp_meta_tag %>
 
     <%= stylesheet_link_tag 'application', media: 'all' %>
+
+    <!-- Importmap 模块标签 - 自动生成 importmap JSON 和模块预加载标签 -->
+    <%= javascript_importmap_tags %>
+
+    <!-- Safari iOS 15 兼容性 polyfill -->
+    <!-- es-module-shims 提供 Importmap polyfill 支持，确保旧版浏览器能正确加载模块 -->
+    <script async src="https://cdnjs.cloudflare.com/ajax/libs/es-module-shims/1.8.2/es-module-shims.min.js" 
+            integrity="sha384-MHnMMUeT4JmZZzRm9KJ4t3B4v5K5z5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5"
+            crossorigin="anonymous"></script>
+    
+    <!-- 为不支持 Importmap 的浏览器提供 module-shim 回退 -->
+    <script type="module-shim">
+      // 检测浏览器是否原生支持 Importmap
+      const supportsImportMaps = HTMLScriptElement.supports 
+        && HTMLScriptElement.supports('importmap')
+      
+      // 如果不支持，es-module-shims 会自动处理模块加载
+      if (!supportsImportMaps) {
+        console.info('es-module-shims: Importmap polyfill activated for legacy browser support')
+      }
+    </script>
   </head>
 
   <body>

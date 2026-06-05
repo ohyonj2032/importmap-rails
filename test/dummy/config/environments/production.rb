@@ -115,4 +115,26 @@ Rails.application.configure do
   # config.active_record.database_selector = { delay: 2.seconds }
   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
   # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
+
+  # ============================================
+  # Importmap 缓存控制策略
+  # ============================================
+
+  # 启用 Importmap digest 用于 HTTP ETag 缓存协同
+  # 当 Importmap 发生变化时，自动使页面缓存失效
+  # 结合 Propshaft 的资产指纹实现客户端与服务器端缓存协同
+  config.importmap.digest = true
+
+  # 配置静态资产缓存控制头
+  # 利用 HTTP/2 多路复用优势，为预加载模块设置长期缓存
+  config.public_file_server.headers = {
+    "Cache-Control" => "public, max-age=31536000, immutable",
+    "Access-Control-Allow-Origin" => "*"
+  }
+
+  # 配置 Importmap 响应头 - 确保 importmap JSON 正确缓存
+  # 使用 digest 机制确保内容变化时缓存失效
+  config.action_dispatch.default_headers.merge!(
+    "X-Importmap-Digest" => -> { Rails.application.importmap.digest(resolver: ActionController::Base.helpers) }
+  )
 end

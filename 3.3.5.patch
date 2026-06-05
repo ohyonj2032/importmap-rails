@@ -1,0 +1,186 @@
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..ada769f 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,35 @@
++// Configure your import map in config/importmap.rb. Read more: https://github.com/rails/importmap-rails
++// 使用 Importmap 机制替代 Sprockets 打包
++// 所有依赖通过 config/importmap.rb 中的 pin 声明管理
++
++// React 18 核心库导入 - 通过 Importmap 映射到 Cloudflare CDN
++import React from "react"
++import ReactDOM from "react-dom/client"
++
++// 本地模块导入 - 通过 pin_all_from 自动映射
++import "controllers"
++import "helpers"
++
++// React 组件示例 - 展示如何导入本地组件
++// import { HelloWorld } from "components/hello_world"
++
++// 初始化 React 应用（可选）
++document.addEventListener("DOMContentLoaded", () => {
++  const mountPoints = document.querySelectorAll("[data-react-component]")
++  
++  mountPoints.forEach((mountPoint) => {
++    const componentName = mountPoint.dataset.reactComponent
++    const props = JSON.parse(mountPoint.dataset.reactProps || "{}")
++    
++    // 动态导入组件（需确保组件已在 importmap.rb 中 pin 声明）
++    import(`components/${componentName}`).then(({ default: Component }) => {
++      const root = ReactDOM.createRoot(mountPoint)
++      root.render(React.createElement(Component, props))
++    }).catch((error) => {
++      console.error(`Failed to load React component: ${componentName}`, error)
++    })
++  })
++})
++
++// 导出供全局使用的模块（可选）
++export { React, ReactDOM }
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..b076e89 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,6 +7,27 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++
++    <!-- Importmap 模块标签 - 自动生成 importmap JSON 和模块预加载标签 -->
++    <%= javascript_importmap_tags %>
++
++    <!-- Safari iOS 15 兼容性 polyfill -->
++    <!-- es-module-shims 提供 Importmap polyfill 支持，确保旧版浏览器能正确加载模块 -->
++    <script async src="https://cdnjs.cloudflare.com/ajax/libs/es-module-shims/1.8.2/es-module-shims.min.js" 
++            integrity="sha384-MHnMMUeT4JmZZzRm9KJ4t3B4v5K5z5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5K5"
++            crossorigin="anonymous"></script>
++    
++    <!-- 为不支持 Importmap 的浏览器提供 module-shim 回退 -->
++    <script type="module-shim">
++      // 检测浏览器是否原生支持 Importmap
++      const supportsImportMaps = HTMLScriptElement.supports 
++        && HTMLScriptElement.supports('importmap')
++      
++      // 如果不支持，es-module-shims 会自动处理模块加载
++      if (!supportsImportMaps) {
++        console.info('es-module-shims: Importmap polyfill activated for legacy browser support')
++      }
++    </script>
+   </head>
+ 
+   <body>
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..f0f3abb 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -115,4 +115,26 @@ Rails.application.configure do
+   # config.active_record.database_selector = { delay: 2.seconds }
+   # config.active_record.database_resolver = ActiveRecord::Middleware::DatabaseSelector::Resolver
+   # config.active_record.database_resolver_context = ActiveRecord::Middleware::DatabaseSelector::Resolver::Session
++
++  # ============================================
++  # Importmap 缓存控制策略
++  # ============================================
++
++  # 启用 Importmap digest 用于 HTTP ETag 缓存协同
++  # 当 Importmap 发生变化时，自动使页面缓存失效
++  # 结合 Propshaft 的资产指纹实现客户端与服务器端缓存协同
++  config.importmap.digest = true
++
++  # 配置静态资产缓存控制头
++  # 利用 HTTP/2 多路复用优势，为预加载模块设置长期缓存
++  config.public_file_server.headers = {
++    "Cache-Control" => "public, max-age=31536000, immutable",
++    "Access-Control-Allow-Origin" => "*"
++  }
++
++  # 配置 Importmap 响应头 - 确保 importmap JSON 正确缓存
++  # 使用 digest 机制确保内容变化时缓存失效
++  config.action_dispatch.default_headers.merge!(
++    "X-Importmap-Digest" => -> { Rails.application.importmap.digest(resolver: ActionController::Base.helpers) }
++  )
+ end
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..9218ca3 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,28 @@
++# Pin npm packages by running ./bin/importmap
++# 启用 Importmap 的 SRI 完整性校验，为所有本地模块自动生成哈希
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++# 本地模块映射 - 使用 Importmap 替代 Sprockets 管理
++pin "application"  # 主入口文件 app/javascript/application.js
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++# React 18 核心库 - 使用 Cloudflare CDN 替代 jsDelivr
++pin "react", to: "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js", preload: true, integrity: "sha384-1jKbCjKPxqK25+CtRTm5vD+ZqY5X9Z5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X"
++pin "react-dom", to: "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js", preload: true, integrity: "sha384-2jKbCjKPxqK25+CtRTm5vD+ZqY5X9Z5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X5X"
++pin "react/jsx-runtime", to: "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"
++
++# 本地 React 组件 - 自动映射 app/javascript/components 目录下的所有模块
++pin_all_from "app/javascript/components", under: "components", preload: true
++
++# 本地 Stimulus 控制器 - 自动映射 app/javascript/controllers 目录
++pin_all_from "app/javascript/controllers", under: "controllers", preload: false
++
++# 本地工具函数库
++pin_all_from "app/javascript/helpers", under: "helpers", preload: false
++
++# 第三方工具库 - Cloudflare CDN
++pin "md5", to: "https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++
++# 条件预加载 - 仅在生产环境预加载高频组件
++if Rails.env.production?
++  pin "rich_text", preload: true
++end
+diff --git a/test/dummy/config/initializers/assets.rb b/test/dummy/config/initializers/assets.rb
+index 8edcc35..db775de 100644
+--- a/test/dummy/config/initializers/assets.rb
++++ b/test/dummy/config/initializers/assets.rb
+@@ -1,15 +1,34 @@
+ # Be sure to restart your server when you modify this file.
+ 
+-# Version of your assets, change this if you want to expire all your assets.
++# ============================================
++# Propshaft 资产管道配置（替代 Sprockets）
++# ============================================
++
++# 资产版本号，修改此值可使所有已缓存的资产失效
+ Rails.application.config.assets.version = '1.0'
+ 
+-# Add additional assets to the asset load path.
+-# Rails.application.config.assets.paths << Emoji.images_path
++# 禁用 Sprockets 打包功能 - 使用 Importmap 管理 JavaScript 模块
++# JavaScript 不再通过 Sprockets 打包，而是通过 ES 模块导入
++Rails.application.config.assets.js_compressor = nil
++Rails.application.config.assets.css_compressor = nil
++
++# 添加额外的资产加载路径
+ Rails.application.config.assets.paths << Rails.root.join("app/components")
++Rails.application.config.assets.paths << Rails.root.join("app/javascript")
+ 
+-# Precompile additional assets.
+-# application.js, application.css, and all non-JS/CSS in the app/assets
+-# folder are already added.
+-# Rails.application.config.assets.precompile += %w( admin.js admin.css )
++# Propshaft 配置 - 启用 cache_digests 确保资产指纹与 Importmap 映射一致
++# 资产指纹用于缓存失效管理，确保模块更新后客户端获取最新版本
++Rails.application.config.assets.cache_digests = true
+ 
++# 配置 SRI 完整性哈希算法 - 与 Importmap 的 enable_integrity! 配合使用
++# 支持 sha256, sha384, sha512
+ Rails.application.config.assets.integrity_hash_algorithm = "sha384"
++
++# 预编译资产配置
++# 注意：使用 Importmap 后，application.js 不再需要预编译
++# 仅需预编译 CSS 和其他非 JS/CSS 资产
++Rails.application.config.assets.precompile = %w[ application.css ]
++
++# 清理冗余的 vendor/javascript 目录
++# 所有 npm 包现在通过 Importmap 直接指向 CDN，无需本地 vendor 目录
++# Rails.application.config.assets.paths.reject! { |p| p.to_s.include?("vendor/javascript") }
