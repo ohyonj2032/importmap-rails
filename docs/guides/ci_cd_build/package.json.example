@@ -1,0 +1,16 @@
+{
+  "name": "importmap-rails-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Rails 7 + Importmap + Propshaft application",
+  "scripts": {
+    "build": "node esbuild.config.js",
+    "build:watch": "node esbuild.config.js --watch"
+  },
+  "dependencies": {
+    "esbuild": "^0.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}

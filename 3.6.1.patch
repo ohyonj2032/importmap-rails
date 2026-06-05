@@ -1,0 +1,612 @@
+diff --git a/docs/guides/ci_cd_build/.github/workflows/ci.yml b/docs/guides/ci_cd_build/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..5023d3a
+--- /dev/null
++++ b/docs/guides/ci_cd_build/.github/workflows/ci.yml
+@@ -0,0 +1,111 @@
++name: CI/CD Pipeline for Importmap Rails
++
++on:
++  push:
++    branches: [ main, develop ]
++  pull_request:
++    branches: [ main, develop ]
++
++jobs:
++  build:
++    name: Build and Test
++    runs-on: ubuntu-latest
++
++    services:
++      postgres:
++        image: postgres:15
++        env:
++          POSTGRES_USER: postgres
++          POSTGRES_PASSWORD: postgres
++          POSTGRES_DB: test
++        options: >-
++          --health-cmd pg_isready
++          --health-interval 10s
++          --health-timeout 5s
++          --health-retries 5
++        ports:
++          - 5432:5432
++
++    steps:
++    - name: Checkout code
++      uses: actions/checkout@v4
++
++    - name: Set up Ruby
++      uses: ruby/setup-ruby@v1
++      with:
++        ruby-version: '3.3'
++        bundler-cache: true
++
++    - name: Set up Node.js
++      uses: actions/setup-node@v4
++      with:
++        node-version: '20'
++        cache: 'npm'
++
++    - name: Install dependencies
++      run: |
++        npm ci
++        bundle install --jobs 4 --retry 3
++
++    - name: Pre-pin and download CDN dependencies (offline lock)
++      run: |
++        # 确保 vendor/javascript 目录存在
++        mkdir -p vendor/javascript
++        # 下载并锁定所有 CDN 依赖到本地
++        bundle exec rails importmap:pin:all || true
++
++    - name: Build JavaScript with esbuild
++      run: npm run build
++
++    - name: Precompile assets
++      env:
++        RAILS_ENV: test
++        DATABASE_URL: postgres://postgres:postgres@localhost:5432/test
++      run: |
++        bundle exec rails assets:precompile
++
++    - name: Run tests
++      env:
++        RAILS_ENV: test
++        DATABASE_URL: postgres://postgres:postgres@localhost:5432/test
++      run: |
++        bundle exec rails db:create db:migrate
++        bundle exec rails test
++
++    - name: Upload vendor/javascript cache
++      uses: actions/cache@v4
++      with:
++        path: vendor/javascript
++        key: ${{ runner.os }}-vendor-javascript-${{ hashFiles('config/importmap.rb') }}
++        restore-keys: |
++          ${{ runner.os }}-vendor-javascript-
++
++  deploy:
++    name: Build and Push Docker Image
++    needs: build
++    runs-on: ubuntu-latest
++    if: github.ref == 'refs/heads/main'
++
++    steps:
++    - name: Checkout code
++      uses: actions/checkout@v4
++
++    - name: Set up Docker Buildx
++      uses: docker/setup-buildx-action@v3
++
++    - name: Log in to Docker Hub
++      uses: docker/login-action@v3
++      with:
++        username: ${{ secrets.DOCKER_USERNAME }}
++        password: ${{ secrets.DOCKER_PASSWORD }}
++
++    - name: Build and push production image
++      uses: docker/build-push-action@v5
++      with:
++        context: .
++        push: true
++        tags: |
++          ${{ secrets.DOCKER_USERNAME }}/importmap-rails-app:latest
++          ${{ secrets.DOCKER_USERNAME }}/importmap-rails-app:${{ github.sha }}
++        cache-from: type=gha
++        cache-to: type=gha,mode=max
+diff --git a/docs/guides/ci_cd_build/Dockerfile b/docs/guides/ci_cd_build/Dockerfile
+new file mode 100644
+index 0000000..a7a2b9a
+--- /dev/null
++++ b/docs/guides/ci_cd_build/Dockerfile
+@@ -0,0 +1,71 @@
++# 多阶段 Dockerfile 示例，解决 esbuild 编译 → Propshaft 指纹 → SRI 哈希的时序问题
++
++# 阶段 1: 基础环境准备
++FROM ruby:3.3-slim AS base
++LABEL maintainer="importmap-rails"
++
++# 安装必要的系统依赖
++RUN apt-get update -qq && apt-get install -y --no-install-recommends \
++  build-essential \
++  libpq-dev \
++  nodejs \
++  npm \
++  curl \
++  && rm -rf /var/lib/apt/lists/*
++
++# 设置工作目录
++WORKDIR /app
++
++# 安装 Node 依赖（包括 esbuild）
++COPY package.json package-lock.json* ./
++RUN npm ci
++
++# 安装 Ruby 依赖
++COPY Gemfile Gemfile.lock ./
++RUN bundle config set --local without 'development test' && bundle install
++
++# 阶段 2: JavaScript 编译阶段
++FROM base AS js-builder
++
++# 复制应用代码
++COPY . .
++
++# 使用 esbuild 编译 TypeScript/JavaScript
++RUN npm run build
++
++# 阶段 3: 资产预编译阶段
++FROM base AS assets-precompiler
++
++# 从 js-builder 复制编译后的 JavaScript 文件
++COPY --from=js-builder /app/app/assets/builds ./app/assets/builds/
++COPY --from=js-builder /app/vendor/javascript ./vendor/javascript/
++COPY --from=js-builder /app/config ./config/
++COPY --from=js-builder /app/app/javascript ./app/javascript/
++
++# 设置 Rails 环境为生产环境
++ENV RAILS_ENV=production
++ENV RAILS_SERVE_STATIC_FILES=true
++ENV SECRET_KEY_BASE=dummy_key_for_asset_precompilation
++
++# 预编译资产（包括 Propshaft 指纹计算）
++RUN bundle exec rails assets:precompile
++
++# 阶段 4: 最终应用镜像
++FROM base AS production
++
++# 从 assets-precompiler 复制预编译后的资产
++COPY --from=assets-precompiler /app/public/assets ./public/assets/
++COPY --from=assets-precompiler /app/app/assets/builds ./app/assets/builds/
++
++# 复制应用代码
++COPY . .
++
++# 设置生产环境
++ENV RAILS_ENV=production
++ENV RAILS_SERVE_STATIC_FILES=true
++
++# 暴露端口
++EXPOSE 3000
++
++# 启动应用
++CMD ["bundle", "exec", "rails", "server", "-b", "0.0.0.0"]
+diff --git a/docs/guides/ci_cd_build/README.md b/docs/guides/ci_cd_build/README.md
+new file mode 100644
+index 0000000..d057995
+--- /dev/null
++++ b/docs/guides/ci_cd_build/README.md
+@@ -0,0 +1,150 @@
++# Rails 7 + Importmap + Propshaft CI/CD 构建指南
++
++本指南提供了完整的工程化配置，解决了在使用 Rails 7 + Importmap + Propshaft 架构时遇到的三个主要问题：
++
++1. **时序死锁**：解决 esbuild 编译 → Propshaft 指纹 → SRI 哈希注入 importmap.rb 的严格时序依赖
++2. **CDN 漂移**：实现 JSPM CDN 依赖的离线锁存与 SRI 预计算
++3. **缓存毒化**：确保 importmap.json 与 Propshaft 编译产物在 CDN 边缘节点的缓存生命周期强绑定
++
++## 文件说明
++
++本目录包含以下关键配置文件：
++
++1. **Dockerfile** - 多阶段构建文件，解决时序问题
++2. **package.json.example** - Node 依赖配置示例
++3. **esbuild.config.js** - esbuild 配置文件，用于编译 TypeScript
++4. **.github/workflows/ci.yml** - GitHub Actions CI/CD 流水线
++5. **lib/tasks/importmap_extra.rake** - 额外的 Rake 任务，用于处理 CDN 依赖和 SRI
++6. **nginx.conf** - Nginx 配置示例，正确处理缓存策略
++
++## 安装步骤
++
++### 1. 复制配置文件
++
++将配置文件复制到你的 Rails 项目中：
++
++```bash
++# 复制 Dockerfile
++cp docs/guides/ci_cd_build/Dockerfile .
++
++# 复制 Node 配置
++cp docs/guides/ci_cd_build/package.json.example package.json
++cp docs/guides/ci_cd_build/esbuild.config.js .
++
++# 复制 CI 配置
++mkdir -p .github/workflows
++cp docs/guides/ci_cd_build/.github/workflows/ci.yml .github/workflows/
++
++# 复制 Rake 任务
++mkdir -p lib/tasks
++cp docs/guides/ci_cd_build/lib/tasks/importmap_extra.rake lib/tasks/
++
++# 复制 Nginx 配置
++cp docs/guides/ci_cd_build/nginx.conf config/nginx.conf
++```
++
++### 2. 配置 importmap.rb
++
++确保你的 `config/importmap.rb` 启用了 SRI 完整性检查：
++
++```ruby
++# config/importmap.rb
++enable_integrity!
++
++# 本地文件（使用 Propshaft 自动计算 SRI）
++pin "application", preload: true
++pin_all_from "app/javascript/controllers", under: "controllers"
++
++# 外部 CDN 依赖（建议在 CI 中预下载到本地）
++pin "react", to: "https://ga.jspm.io/npm:react@18.2.0/index.js"
++pin "react-dom", to: "https://ga.jspm.io/npm:react-dom@18.2.0/index.js"
++```
++
++### 3. 配置 Propshaft 完整性算法
++
++在 `config/application.rb` 或 `config/environments/production.rb` 中：
++
++```ruby
++config.assets.integrity_hash_algorithm = 'sha384'
++```
++
++## Docker 多阶段构建详解
++
++我们的 Dockerfile 使用 4 个阶段，解决了时序问题：
++
++```
++base → js-builder → assets-precompiler → production
++```
++
++1. **base 阶段**：设置基础环境，安装 Ruby 和 Node 依赖
++2. **js-builder 阶段**：使用 esbuild 编译 TypeScript 到 `app/assets/builds/`
++3. **assets-precompiler 阶段**：运行 `rails assets:precompile`，让 Propshaft 计算指纹
++4. **production 阶段**：最终运行环境
++
++## CI/CD 工作流程
++
++GitHub Actions 工作流程执行以下步骤：
++
++1. 检出代码并设置 Ruby/Node 环境
++2. 安装依赖
++3. **预锁定 CDN 依赖**：将外部 CDN 包下载到 `vendor/javascript/`
++4. 使用 esbuild 编译 TypeScript
++5. 预编译资产（Propshaft 生成指纹）
++6. 运行测试
++7. （仅主分支）构建并推送 Docker 镜像
++
++## Nginx 缓存策略
++
++Nginx 配置采用三层缓存策略：
++
++| 文件类型                | 缓存策略                          | 原因                                      |
++|------------------------|----------------------------------|------------------------------------------|
++| **importmap.json**     | 完全不缓存（no-store）            | 确保浏览器始终获取最新的 SRI 哈希         |
++| **带指纹的 Propshaft 资产** | 长期缓存（1年+immutable） | 文件名包含指纹，变更时 URL 会改变        |
++| **vendor/javascript**  | 中等缓存（7天）                   | 依赖包不常变化                          |
++| **其他静态资源**       | 短缓存（1小时）                   | 确保快速更新                            |
++
++## 使用自定义 Rake 任务
++
++我们提供了两个额外的 Rake 任务：
++
++```bash
++# 下载并锁定所有 CDN 依赖到本地 vendor/javascript/
++rails importmap:pin
++
++# 预计算外部 CDN 包的 SRI 哈希并保存到 config/sri_hashes.json
++rails importmap:calculate_sri
++```
++
++## 最佳实践建议
++
++1. **将 vendor/javascript/ 提交到 Git**：确保 CI 和生产环境使用相同的依赖版本
++2. **使用内容摘要指纹**：Propshaft 会自动处理
++3. **配置正确的 CSP**：在 Nginx 或 Rails 中配置 Content-Security-Policy
++4. **监控部署后的日志**：检查是否有 SRI 校验失败的错误
++5. **定期更新依赖**：使用 `bin/importmap update` 保持依赖最新
++
++## 故障排除
++
++### Safari 15 出现 SRI 校验失败
++
++确保：
++1. importmap.json 没有被 CDN 缓存（检查 Nginx 配置）
++2. 使用了 `es-module-shims` polyfill
++
++```erb
++<!-- 在 app/views/layouts/application.html.erb 中添加 -->
++<script async src="https://ga.jspm.io/npm:es-module-shims@1.8.2/dist/es-module-shims.js" data-turbo-track="reload"></script>
++<%= javascript_importmap_tags %>
++```
++
++### Docker 构建时序错误
++
++确保：
++- Dockerfile 中正确使用多阶段构建
++- 编译顺序正确：esbuild → assets:precompile
++
++### CDN URL 变化导致 SRI 失败
++
++使用 `importmap:pin` 任务将依赖下载到本地，避免外部 CDN 依赖。
+diff --git a/docs/guides/ci_cd_build/esbuild.config.js b/docs/guides/ci_cd_build/esbuild.config.js
+new file mode 100644
+index 0000000..9818499
+--- /dev/null
++++ b/docs/guides/ci_cd_build/esbuild.config.js
+@@ -0,0 +1,44 @@
++const { build } = require('esbuild');
++const fs = require('fs');
++const path = require('path');
++
++// 确保输出目录存在
++const outDir = path.join(__dirname, 'app', 'assets', 'builds');
++if (!fs.existsSync(outDir)) {
++  fs.mkdirSync(outDir, { recursive: true });
++}
++
++const entryPoints = [
++  'app/javascript/application.ts',
++  'app/javascript/controllers/index.ts'
++].filter(file => fs.existsSync(path.join(__dirname, file)));
++
++const config = {
++  entryPoints: entryPoints,
++  bundle: true,
++  sourcemap: true,
++  minify: process.env.NODE_ENV === 'production',
++  target: ['es2020'],
++  outdir: outDir,
++  logLevel: 'info',
++  format: 'esm',
++  platform: 'browser'
++};
++
++async function main() {
++  if (process.argv.includes('--watch')) {
++    const context = await build({
++      ...config,
++      sourcemap: 'linked'
++    });
++    await context.watch();
++    console.log('Watching for changes...');
++  } else {
++    await build(config);
++  }
++}
++
++main().catch((e) => {
++  console.error(e);
++  process.exit(1);
++});
+diff --git a/docs/guides/ci_cd_build/lib/tasks/importmap_extra.rake b/docs/guides/ci_cd_build/lib/tasks/importmap_extra.rake
+new file mode 100644
+index 0000000..263f408
+--- /dev/null
++++ b/docs/guides/ci_cd_build/lib/tasks/importmap_extra.rake
+@@ -0,0 +1,81 @@
++namespace :importmap do
++  desc "Pin all CDN dependencies locally (offline lock) and calculate SRI"
++  task pin: :environment do
++    require 'importmap/packager'
++    require 'digest'
++
++    packager = Importmap::Packager.new
++
++    # 读取 importmap.rb 中的所有包
++    importmap_path = Rails.root.join('config/importmap.rb')
++    importmap_content = File.read(importmap_path)
++
++    # 找到所有通过 CDN 引用的包（to 参数是 URL 的）
++    packages_to_pin = []
++
++    importmap_content.lines.each do |line|
++      # 匹配类似 pin "react", to: "https://cdn.example.com/react.js" 的行
++      match = line.match(/pin\s+["']([^"']+)["'],?\s*to:\s*["'](https?:\/\/[^"']+)["']/)
++      if match
++        name = match[1]
++        url = match[2]
++        packages_to_pin << { name: name, url: url }
++      end
++    end
++
++    puts "Found #{packages_to_pin.count} CDN packages to pin locally"
++
++    packages_to_pin.each do |package|
++      puts "Downloading and pinning #{package[:name]} from #{package[:url]}"
++      packager.download(package[:name], package[:url])
++    end
++
++    puts "All CDN dependencies pinned successfully"
++  end
++
++  desc "Pre-calculate SRI hashes for all external CDN packages"
++  task calculate_sri: :environment do
++    require 'digest'
++    require 'net/http'
++    require 'uri'
++
++    sri_data = {}
++
++    importmap_path = Rails.root.join('config/importmap.rb')
++    importmap_content = File.read(importmap_path)
++
++    importmap_content.lines.each do |line|
++      match = line.match(/pin\s+["']([^"']+)["'],?\s*to:\s*["'](https?:\/\/[^"']+)["']/)
++      if match
++        name = match[1]
++        url = match[2]
++        puts "Calculating SRI for #{name} from #{url}"
++
++        begin
++          response = Net::HTTP.get_response(URI(url))
++          if response.code == '200'
++            sha256 = Digest::SHA256.base64digest(response.body)
++            sha384 = Digest::SHA384.base64digest(response.body)
++            sha512 = Digest::SHA512.base64digest(response.body)
++
++            sri_data[name] = {
++              url: url,
++              sha256: "sha256-#{sha256}",
++              sha384: "sha384-#{sha384}",
++              sha512: "sha512-#{sha512}"
++            }
++          else
++            puts "Warning: Failed to fetch #{url}, status: #{response.code}"
++          end
++        rescue => e
++          puts "Error fetching #{url}: #{e.message}"
++        end
++      end
++    end
++
++    # 保存 SRI 数据到文件
++    sri_file = Rails.root.join('config', 'sri_hashes.json')
++    File.write(sri_file, JSON.pretty_generate(sri_data))
++    puts "SRI hashes saved to #{sri_file}"
++  end
++end
+diff --git a/docs/guides/ci_cd_build/nginx.conf b/docs/guides/ci_cd_build/nginx.conf
+new file mode 100644
+index 0000000..81f0b55
+--- /dev/null
++++ b/docs/guides/ci_cd_build/nginx.conf
+@@ -0,0 +1,98 @@
++# Nginx 配置示例 - 适用于 Rails 7 + Importmap + Propshaft + SRI
++
++upstream rails_app {
++  server 127.0.0.1:3000;
++  keepalive 32;
++}
++
++server {
++  listen 80;
++  listen [::]:80;
++  server_name your-app.example.com;
++  root /app/public;
++
++  # 安全头部配置
++  add_header X-Frame-Options "SAMEORIGIN" always;
++  add_header X-XSS-Protection "1; mode=block" always;
++  add_header X-Content-Type-Options "nosniff" always;
++  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
++  add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://ga.jspm.io; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;" always;
++
++  # gzip 压缩
++  gzip on;
++  gzip_vary on;
++  gzip_min_length 1024;
++  gzip_types text/plain text/css text/xml text/javascript application/x-javascript application/xml+rss application/json application/javascript;
++
++  # ==================== 关键：Importmap 缓存策略 ====================
++
++  # 1. 动态生成的 importmap.json - NO CACHE
++  # 假设 Rails 应用通过某个路由提供动态 importmap.json
++  location ~* /importmap\.json$ {
++    proxy_pass http://rails_app;
++    proxy_set_header Host $host;
++    proxy_set_header X-Real-IP $remote_addr;
++    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++    
++    # 禁用缓存，确保每次请求都获取最新的 importmap
++    add_header Cache-Control "no-store, no-cache, must-revalidate, private, max-age=0" always;
++    add_header Pragma "no-cache" always;
++    expires -1;
++    
++    # 防止 ETag 和 Last-Modified 导致 304 缓存
++    add_header ETag "";
++    add_header Last-Modified "";
++    if_modified_since off;
++    etag off;
++  }
++
++  # ==================== Propshaft 带指纹的静态资源 ====================
++
++  # 2. 带指纹的 Propshaft 编译资产 - 永久缓存
++  location ~* ^/assets/.*-[0-9a-f]{32,}.*\.(js|css|png|jpg|jpeg|gif|svg|ico)$ {
++    expires 1y;
++    add_header Cache-Control "public, max-age=31536000, immutable" always;
++    
++    # 启用 try_files 从文件系统直接提供，否则回退到应用
++    try_files $uri @rails;
++  }
++
++  # ==================== Vendor JavaScript ====================
++
++  # 3. Vendor JavaScript 目录 - 中等缓存
++  location ~* ^/assets/.*vendor.*\.(js)$ {
++    expires 7d;
++    add_header Cache-Control "public, max-age=604800" always;
++    try_files $uri @rails;
++  }
++
++  # ==================== 其他静态资源 ====================
++
++  # 4. 不带指纹的常规静态资源 - 短缓存
++  location ~* \.(js|css|png|jpg|jpeg|gif|svg|ico)$ {
++    expires 1h;
++    add_header Cache-Control "public, max-age=3600" always;
++    try_files $uri @rails;
++  }
++
++  # ==================== Rails 应用路由 ====================
++
++  location / {
++    try_files $uri @rails;
++  }
++
++  location @rails {
++    proxy_pass http://rails_app;
++    proxy_set_header Host $host;
++    proxy_set_header X-Real-IP $remote_addr;
++    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
++    proxy_set_header X-Forwarded-Proto $scheme;
++    proxy_ssl_server_name on;
++    
++    # 动态页面不缓存
++    add_header Cache-Control "no-cache, no-store, must-revalidate, private" always;
++    
++    proxy_http_version 1.1;
++    proxy_set_header Connection "";
++  }
++}
+diff --git a/docs/guides/ci_cd_build/package.json.example b/docs/guides/ci_cd_build/package.json.example
+new file mode 100644
+index 0000000..275d3b2
+--- /dev/null
++++ b/docs/guides/ci_cd_build/package.json.example
+@@ -0,0 +1,16 @@
++{
++  "name": "importmap-rails-app",
++  "private": true,
++  "version": "1.0.0",
++  "description": "Rails 7 + Importmap + Propshaft application",
++  "scripts": {
++    "build": "node esbuild.config.js",
++    "build:watch": "node esbuild.config.js --watch"
++  },
++  "dependencies": {
++    "esbuild": "^0.21.0"
++  },
++  "devDependencies": {
++    "@types/node": "^20.0.0"
++  }
++}
