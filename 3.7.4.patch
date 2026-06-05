@@ -1,0 +1,38 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..34d4d61 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -41,7 +41,8 @@ module Importmap::ImportmapTagsHelper
+ 
+       safe_join(Array(items).collect { |item|
+         path, options = yield(item)
+-        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
++        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce,
++          crossorigin: "anonymous", **options
+       }, "\n")
+     end
+ end
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..b04b2e0 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -42,8 +42,8 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+   test "javascript_importmap_module_preload_tags" do
+     assert_dom_equal(
+       %(
+-        <link rel="modulepreload" href="https://cdn.skypack.dev/md5">
+-        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb">
++        <link rel="modulepreload" href="https://cdn.skypack.dev/md5" crossorigin="anonymous">
++        <link rel="modulepreload" href="/rich_text.js" integrity="sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb" crossorigin="anonymous">
+       ),
+       javascript_importmap_module_preload_tags
+     )
+@@ -76,7 +76,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+     assert_includes importmap_html, %{<script type="importmap" data-turbo-track="reload">}
+     assert_includes importmap_html, %{"foo": "/foo.js"}
+     assert_includes importmap_html, %{"bar": "/bar.js"}
+-    assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js">}
++    assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js" crossorigin="anonymous">}
+     refute_includes importmap_html, %{<link rel="modulepreload" href="/bar.js">}
+     assert_includes importmap_html, %{<script type="module">import "foo"</script>}
+   end

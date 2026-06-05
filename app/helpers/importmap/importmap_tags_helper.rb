@@ -41,7 +41,8 @@ module Importmap::ImportmapTagsHelper
 
       safe_join(Array(items).collect { |item|
         path, options = yield(item)
-        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce, **options
+        tag.link rel: "modulepreload", href: path, nonce: content_security_policy_nonce,
+          crossorigin: "anonymous", **options
       }, "\n")
     end
 end
