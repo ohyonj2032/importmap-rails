@@ -1,0 +1,114 @@
+diff --git a/test/dummy/app/javascript/application.js b/test/dummy/app/javascript/application.js
+index e69de29..94af704 100644
+--- a/test/dummy/app/javascript/application.js
++++ b/test/dummy/app/javascript/application.js
+@@ -0,0 +1,17 @@
++import "rich_text"
++import "controllers"
++
++import React from "react"
++import ReactDOM from "react-dom/client"
++
++document.addEventListener("DOMContentLoaded", () => {
++  const rootElement = document.getElementById("root")
++  if (rootElement) {
++    const root = ReactDOM.createRoot(rootElement)
++    root.render(
++      <React.StrictMode>
++        <div>Hello React 18 with Importmap!</div>
++      </React.StrictMode>
++    )
++  }
++})
+diff --git a/test/dummy/app/views/layouts/application.html.erb b/test/dummy/app/views/layouts/application.html.erb
+index b74860f..d6e0815 100644
+--- a/test/dummy/app/views/layouts/application.html.erb
++++ b/test/dummy/app/views/layouts/application.html.erb
+@@ -7,9 +7,14 @@
+     <%= csp_meta_tag %>
+ 
+     <%= stylesheet_link_tag 'application', media: 'all' %>
++    <%= javascript_importmap_tags %>
+   </head>
+ 
+   <body>
++    <div id="root"></div>
+     <%= yield %>
++
++    <%= javascript_import_module_tag "application" %>
++    <script type="module-shim" src="https://ga.jspm.io/npm:es-module-shims@1.7.3/dist/es-module-shims.js"></script>
+   </body>
+ </html>
+diff --git a/test/dummy/config/environments/production.rb b/test/dummy/config/environments/production.rb
+index ab7562f..157036e 100644
+--- a/test/dummy/config/environments/production.rb
++++ b/test/dummy/config/environments/production.rb
+@@ -30,6 +30,18 @@ Rails.application.configure do
+   # Do not fallback to assets pipeline if a precompiled asset is missed.
+   config.assets.compile = false
+ 
++  # Enable Propshaft digest for assets
++  config.assets.digest = true
++
++  # Configure Importmap for production
++  config.importmap.digest = true
++  config.importmap.cache = true
++
++  # Cache control headers for JavaScript modules
++  config.public_file_server.headers = {
++    'Cache-Control' => 'public, max-age=31536000, immutable'
++  }
++
+   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
+   # config.asset_host = 'http://assets.example.com'
+ 
+diff --git a/test/dummy/config/importmap.rb b/test/dummy/config/importmap.rb
+index ab42f78..0f4aa94 100644
+--- a/test/dummy/config/importmap.rb
++++ b/test/dummy/config/importmap.rb
+@@ -1,7 +1,17 @@
+ enable_integrity!
+ 
+-pin_all_from "app/assets/javascripts"
++pin_all_from "app/javascript", under: "controllers"
++pin_all_from "app/components", under: "components"
++pin_all_from "lib/assets/javascripts", under: "lib"
+ 
+-pin "md5", to: "https://cdn.skypack.dev/md5", preload: true, integrity: false
+-pin "not_there", to: "nowhere.js", preload: false, integrity: false
+-pin "rich_text", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
++pin "application", preload: true
++pin "rich_text", preload: true
++pin "md5", to: "https://cdnjs.cloudflare.com/ajax/libs/blueimp-md5/2.19.0/js/md5.min.js", preload: true
++pin "react", to: "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js", preload: true
++pin "react-dom", to: "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js", preload: true
++pin "@hotwired/stimulus", to: "https://cdnjs.cloudflare.com/ajax/libs/stimulus/3.2.2/stimulus.min.js", preload: true
++pin "@hotwired/stimulus-loading", to: "https://cdnjs.cloudflare.com/ajax/libs/stimulus-loading/1.0.1/index.min.js", preload: true
++
++resolve_alias "controllers", to: "app/javascript/controllers"
++resolve_alias "components", to: "app/components"
++resolve_alias "lib", to: "lib/assets/javascripts"
+diff --git a/test/dummy/config/initializers/assets.rb b/test/dummy/config/initializers/assets.rb
+index 8edcc35..a51bd60 100644
+--- a/test/dummy/config/initializers/assets.rb
++++ b/test/dummy/config/initializers/assets.rb
+@@ -7,9 +7,19 @@ Rails.application.config.assets.version = '1.0'
+ # Rails.application.config.assets.paths << Emoji.images_path
+ Rails.application.config.assets.paths << Rails.root.join("app/components")
+ 
++# Disable Sprockets bundling, use Importmap for JS
++Rails.application.config.assets.compile = false
++
++# Enable Propshaft cache digests for fingerprinted assets
++Rails.application.config.assets.digest = true
++Rails.application.config.assets.cache_digests = true
++
+ # Precompile additional assets.
+ # application.js, application.css, and all non-JS/CSS in the app/assets
+ # folder are already added.
+ # Rails.application.config.assets.precompile += %w( admin.js admin.css )
+ 
+ Rails.application.config.assets.integrity_hash_algorithm = "sha384"
++
++# Configure Importmap digest for production
++Rails.application.config.importmap.digest = true

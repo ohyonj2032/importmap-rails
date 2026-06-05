@@ -30,6 +30,18 @@ Rails.application.configure do
   # Do not fallback to assets pipeline if a precompiled asset is missed.
   config.assets.compile = false
 
+  # Enable Propshaft digest for assets
+  config.assets.digest = true
+
+  # Configure Importmap for production
+  config.importmap.digest = true
+  config.importmap.cache = true
+
+  # Cache control headers for JavaScript modules
+  config.public_file_server.headers = {
+    'Cache-Control' => 'public, max-age=31536000, immutable'
+  }
+
   # Enable serving of images, stylesheets, and JavaScripts from an asset server.
   # config.asset_host = 'http://assets.example.com'
 
