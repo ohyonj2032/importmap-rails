@@ -64,9 +64,9 @@ class Importmap::Map
   # * Requires asset pipeline support for integrity calculation (Sprockets or Propshaft 1.2+)
   # * For Propshaft, you must configure +config.assets.integrity_hash_algorithm+
   # * External CDN packages should provide their own integrity hashes
-  def enable_integrity!
+  def enable_integrity!(enable = !Rails.env.test?)
     clear_cache
-    @integrity = true
+    @integrity = enable
   end
 
   def pin(name, to: nil, preload: true, integrity: true)

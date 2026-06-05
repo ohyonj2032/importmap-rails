@@ -1,0 +1,145 @@
+diff --git a/app/helpers/importmap/importmap_tags_helper.rb b/app/helpers/importmap/importmap_tags_helper.rb
+index 295b6dc..148f66b 100644
+--- a/app/helpers/importmap/importmap_tags_helper.rb
++++ b/app/helpers/importmap/importmap_tags_helper.rb
+@@ -11,8 +11,10 @@ module Importmap::ImportmapTagsHelper
+   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
+   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
+   def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
+-    tag.script importmap_json.html_safe,
+-      type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
++    safe_join [
++      tag.script(importmap_json.html_safe, type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce),
++      tag.script("window.esmsInitOptions = { shimMode: true };".html_safe, nonce: request&.content_security_policy_nonce)
++    ], "\n"
+   end
+ 
+   # Import a named JavaScript module(s) using a script-module tag.
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 337c7fe..056c4ea 100755
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -30,13 +30,13 @@ module Importmap
+     end
+ 
+     initializer "importmap.cache_sweeper" do |app|
+-      if app.config.importmap.sweep_cache && !app.config.cache_classes
++      if app.config.importmap.sweep_cache
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+         ActiveSupport.on_load(:action_controller_base) do
+-          before_action { Rails.application.importmap.cache_sweeper.execute_if_updated }
++          before_action { Rails.application.importmap.cache_sweeper&.execute_if_updated }
+         end
+       end
+     end
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index 085c28c..9ee8189 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -64,9 +64,9 @@ class Importmap::Map
+   # * Requires asset pipeline support for integrity calculation (Sprockets or Propshaft 1.2+)
+   # * For Propshaft, you must configure +config.assets.integrity_hash_algorithm+
+   # * External CDN packages should provide their own integrity hashes
+-  def enable_integrity!
++  def enable_integrity!(enable = !Rails.env.test?)
+     clear_cache
+-    @integrity = true
++    @integrity = enable
+   end
+ 
+   def pin(name, to: nil, preload: true, integrity: true)
+diff --git a/test/importmap_tags_helper_test.rb b/test/importmap_tags_helper_test.rb
+index 21a8ef9..d835577 100644
+--- a/test/importmap_tags_helper_test.rb
++++ b/test/importmap_tags_helper_test.rb
+@@ -34,6 +34,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+           }
+         }
+       </script>
++      <script>window.esmsInitOptions = { shimMode: true };</script>
+       ),
+       javascript_inline_importmap_tag
+     )
+@@ -74,6 +75,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
+     importmap_html = javascript_importmap_tags("foo", importmap: importmap)
+ 
+     assert_includes importmap_html, %{<script type="importmap" data-turbo-track="reload">}
++    assert_includes importmap_html, %{window.esmsInitOptions = { shimMode: true };}
+     assert_includes importmap_html, %{"foo": "/foo.js"}
+     assert_includes importmap_html, %{"bar": "/bar.js"}
+     assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js">}
+diff --git a/test/importmap_test.rb b/test/importmap_test.rb
+index 007f1c2..a31a119 100644
+--- a/test/importmap_test.rb
++++ b/test/importmap_test.rb
+@@ -5,8 +5,7 @@ class ImportmapTest < ActiveSupport::TestCase
+   def setup
+     @importmap = Importmap::Map.new.tap do |map|
+       map.draw do
+-        enable_integrity!
+-
++        enable_integrity!(true)
+         pin "application", preload: false, integrity: false
+         pin "editor", to: "rich_text.js", preload: false, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+         pin "not_there", to: "nowhere.js", preload: false, integrity: "sha384-somefakehash"
+@@ -52,7 +51,7 @@ class ImportmapTest < ActiveSupport::TestCase
+ 
+     test "enable_integrity! change the map to generate integrity attribute" do
+     @importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++      map.enable_integrity!(true)
+       map.pin "application", preload: false
+     end
+ 
+@@ -81,8 +80,8 @@ class ImportmapTest < ActiveSupport::TestCase
+   test "integrity: 'custom-hash' uses the provided string" do
+     custom_hash = "sha384-customhash123"
+ 
+-    @importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++   @importmap = Importmap::Map.new.tap do |map|
++      map.enable_integrity!(true)
+       map.pin "application", preload: false, integrity: custom_hash
+     end
+ 
+@@ -146,8 +145,8 @@ class ImportmapTest < ActiveSupport::TestCase
+   end
+ 
+   test "importmap json includes integrity hashes from integrity: true" do
+-    importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++   importmap = Importmap::Map.new.tap do |map|
++      map.enable_integrity!(true)
+       map.pin "application", integrity: true
+     end
+ 
+@@ -329,7 +328,7 @@ class ImportmapTest < ActiveSupport::TestCase
+ 
+   test "preloaded_module_packages includes package integrity when present" do
+     importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++      map.enable_integrity!(true)
+       map.pin "editor", to: "rich_text.js", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+     end
+ 
+@@ -343,7 +342,7 @@ class ImportmapTest < ActiveSupport::TestCase
+ 
+   test "pin with integrity: true should calculate integrity dynamically" do
+     importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++      map.enable_integrity!(true)
+       map.pin "editor", to: "rich_text.js", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+     end
+ 
+@@ -392,7 +391,7 @@ class ImportmapTest < ActiveSupport::TestCase
+ 
+   test "pin_all_from with integrity: true should calculate integrity dynamically" do
+     importmap = Importmap::Map.new.tap do |map|
+-      map.enable_integrity!
++      map.enable_integrity!(true)
+       map.pin_all_from "app/javascript/controllers", under: "controllers", integrity: true
+     end
+ 

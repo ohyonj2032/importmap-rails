@@ -5,8 +5,7 @@ class ImportmapTest < ActiveSupport::TestCase
   def setup
     @importmap = Importmap::Map.new.tap do |map|
       map.draw do
-        enable_integrity!
-
+        enable_integrity!(true)
         pin "application", preload: false, integrity: false
         pin "editor", to: "rich_text.js", preload: false, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
         pin "not_there", to: "nowhere.js", preload: false, integrity: "sha384-somefakehash"
@@ -52,7 +51,7 @@ class ImportmapTest < ActiveSupport::TestCase
 
     test "enable_integrity! change the map to generate integrity attribute" do
     @importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+      map.enable_integrity!(true)
       map.pin "application", preload: false
     end
 
@@ -81,8 +80,8 @@ class ImportmapTest < ActiveSupport::TestCase
   test "integrity: 'custom-hash' uses the provided string" do
     custom_hash = "sha384-customhash123"
 
-    @importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+   @importmap = Importmap::Map.new.tap do |map|
+      map.enable_integrity!(true)
       map.pin "application", preload: false, integrity: custom_hash
     end
 
@@ -146,8 +145,8 @@ class ImportmapTest < ActiveSupport::TestCase
   end
 
   test "importmap json includes integrity hashes from integrity: true" do
-    importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+   importmap = Importmap::Map.new.tap do |map|
+      map.enable_integrity!(true)
       map.pin "application", integrity: true
     end
 
@@ -329,7 +328,7 @@ class ImportmapTest < ActiveSupport::TestCase
 
   test "preloaded_module_packages includes package integrity when present" do
     importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+      map.enable_integrity!(true)
       map.pin "editor", to: "rich_text.js", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
     end
 
@@ -343,7 +342,7 @@ class ImportmapTest < ActiveSupport::TestCase
 
   test "pin with integrity: true should calculate integrity dynamically" do
     importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+      map.enable_integrity!(true)
       map.pin "editor", to: "rich_text.js", preload: true, integrity: "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
     end
 
@@ -392,7 +391,7 @@ class ImportmapTest < ActiveSupport::TestCase
 
   test "pin_all_from with integrity: true should calculate integrity dynamically" do
     importmap = Importmap::Map.new.tap do |map|
-      map.enable_integrity!
+      map.enable_integrity!(true)
       map.pin_all_from "app/javascript/controllers", under: "controllers", integrity: true
     end
 

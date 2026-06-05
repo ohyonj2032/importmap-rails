@@ -34,6 +34,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
           }
         }
       </script>
+      <script>window.esmsInitOptions = { shimMode: true };</script>
       ),
       javascript_inline_importmap_tag
     )
@@ -74,6 +75,7 @@ class Importmap::ImportmapTagsHelperTest < ActionView::TestCase
     importmap_html = javascript_importmap_tags("foo", importmap: importmap)
 
     assert_includes importmap_html, %{<script type="importmap" data-turbo-track="reload">}
+    assert_includes importmap_html, %{window.esmsInitOptions = { shimMode: true };}
     assert_includes importmap_html, %{"foo": "/foo.js"}
     assert_includes importmap_html, %{"bar": "/bar.js"}
     assert_includes importmap_html, %{<link rel="modulepreload" href="/foo.js">}

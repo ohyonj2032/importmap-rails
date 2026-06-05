@@ -11,8 +11,10 @@ module Importmap::ImportmapTagsHelper
   # Generate an inline importmap tag using the passed `importmap_json` JSON string.
   # By default, `Rails.application.importmap.to_json(resolver: self)` is used.
   def javascript_inline_importmap_tag(importmap_json = Rails.application.importmap.to_json(resolver: self))
-    tag.script importmap_json.html_safe,
-      type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce
+    safe_join [
+      tag.script(importmap_json.html_safe, type: "importmap", "data-turbo-track": "reload", nonce: request&.content_security_policy_nonce),
+      tag.script("window.esmsInitOptions = { shimMode: true };".html_safe, nonce: request&.content_security_policy_nonce)
+    ], "\n"
   end
 
   # Import a named JavaScript module(s) using a script-module tag.
