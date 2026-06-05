@@ -1,0 +1,506 @@
+diff --git a/lib/importmap/engine.rb b/lib/importmap/engine.rb
+index 304a10f..77ef2c8 100644
+--- a/lib/importmap/engine.rb
++++ b/lib/importmap/engine.rb
+@@ -5,6 +5,8 @@ module Importmap
+     config.importmap.sweep_cache = Rails.env.development? || Rails.env.test?
+     config.importmap.cache_sweepers = []
+     config.importmap.rescuable_asset_errors = []
++    config.importmap.builds_path = "app/assets/builds"
++    config.importmap.typescript_src_paths = [ "app/javascript", "app/components" ]
+ 
+     config.autoload_once_paths = %W( #{root}/app/helpers #{root}/app/controllers )
+ 
+@@ -28,6 +30,7 @@ module Importmap
+     initializer "importmap.cache_sweeper" do |app|
+       if app.config.importmap.sweep_cache && !app.config.cache_classes
+         app.config.importmap.cache_sweepers << app.root.join("app/javascript")
++        app.config.importmap.cache_sweepers << app.root.join(app.config.importmap.builds_path)
+         app.config.importmap.cache_sweepers << app.root.join("vendor/javascript")
+         app.importmap.cache_sweeper(watches: app.config.importmap.cache_sweepers)
+ 
+diff --git a/lib/importmap/map.rb b/lib/importmap/map.rb
+index d30d1f5..855b5c9 100644
+--- a/lib/importmap/map.rb
++++ b/lib/importmap/map.rb
+@@ -156,13 +156,16 @@ class Importmap::Map
+   # when the directories passed on initialization via `watches:` have changes. This is used in development
+   # and test to ensure the map caches are reset when javascript files are changed.
+   def cache_sweeper(watches: nil)
++    extensions = %w[js mjs ts tsx]
++
+     if watches
+       @cache_sweeper =
+-        Rails.application.config.file_watcher.new([], Array(watches).collect { |dir| [ dir.to_s, "js"] }.to_h) do
++        Rails.application.config.file_watcher.new([], Array(watches).collect { |dir| [ dir.to_s, extensions] }.to_h) do
+           clear_cache
+         end
+     else
+       @cache_sweeper
+     end
+   end
+ 
+@@ -193,13 +196,18 @@ class Importmap::Map
+     def build_import_map(packages, resolver:)
+       map = { "imports" => resolve_asset_paths(packages, resolver: resolver) }
+       integrity = build_integrity_hash(packages, resolver: resolver)
+-      map["integrity"] = integrity unless integrity.empty?
++
++      static_integrity  = integrity.reject { |_, v| v&.start_with?("runtime:") }
++      dynamic_integrity = integrity.select { |_, v| v&.start_with?("runtime:") }
++        .transform_values { |v| v.sub("runtime:", "") }
++
++      map["integrity"] = static_integrity unless static_integrity.empty?
++      map["dynamicIntegrity"] = dynamic_integrity unless dynamic_integrity.empty?
+       map
+     end
+ 
+@@ -215,11 +223,14 @@ class Importmap::Map
+ 
+       case integrity
+       when true
+-        resolver.asset_integrity(path) if resolver.respond_to?(:asset_integrity)
++        if path.start_with?("http://", "https://")
++          nil
++        else
++          resolver.asset_integrity(path) if resolver.respond_to?(:asset_integrity)
++        end
+       when String
+         integrity
++      when :runtime
++        "runtime:#{path}"
+       end
+     end
+ 
+@@ -295,15 +306,20 @@ class Importmap::Map
+     end
+ 
+     def module_path_from(filename, mapping)
+-      [ mapping.path || mapping.under, filename.to_s ].compact.reject(&:empty?).join("/")
++      base = [ mapping.path || mapping.under, filename.to_s ].compact.reject(&:empty?).join("/")
++
++      if base.end_with?(".ts", ".tsx")
++        base = base.sub(/\.tsx?$/, ".js")
++        base = base.sub(%r{^(app|lib)/javascript/}, "#{Rails.application.config.importmap.builds_path}/")
++      end
++
++      base
+     end
+ 
+     def find_javascript_files_in_tree(path)
+-      Dir[path.join("**/*.js{,m}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
++      Dir[path.join("**/*.{js,jsm,ts,tsx}")].sort.collect { |file| Pathname.new(file) }.select(&:file?)
+     end
+ 
+     def absolute_root_of(path)
+       (pathname = Pathname.new(path)).absolute? ? pathname : Rails.root.join(path)
+     end
+diff --git a/scripts/esbuild-watch.js b/scripts/esbuild-watch.js
+new file mode 100644
+index 0000000..f7c5f08
+--- /dev/null
++++ b/scripts/esbuild-watch.js
+@@ -0,0 +1,100 @@
++const esbuild = require("esbuild");
++const fs = require("fs");
++const path = require("path");
++
++const BUILD_DIR = path.resolve(__dirname, "../app/assets/builds");
++const SRC_DIRS = [
++  path.resolve(__dirname, "../app/javascript"),
++  path.resolve(__dirname, "../app/components"),
++];
++
++fs.mkdirSync(BUILD_DIR, { recursive: true });
++fs.writeFileSync(path.join(BUILD_DIR, ".keep"), "");
++
++const ctx = await esbuild.context({
++  entryPoints: findEntryPoints(SRC_DIRS),
++  outdir: BUILD_DIR,
++  bundle: false,
++  format: "esm",
++  target: ["es2020"],
++  sourcemap: "inline",
++  platform: "browser",
++  loader: {
++    ".ts": "ts",
++    ".tsx": "tsx",
++  },
++  logLevel: "info",
++  plugins: [touchManifestPlugin()],
++});
++
++await ctx.watch();
++console.log("[esbuild] Watching TypeScript sources...");
++
++function findEntryPoints(dirs) {
++  const entries = [];
++  for (const dir of dirs) {
++    if (!fs.existsSync(dir)) continue;
++    walkDir(dir, (file) => {
++      if (/\.(ts|tsx)$/.test(file) && !file.endsWith(".d.ts")) {
++        entries.push(file);
++      }
++    });
++  }
++  return entries;
++}
++
++function walkDir(dir, callback) {
++  const files = fs.readdirSync(dir, { withFileTypes: true });
++  for (const f of files) {
++    const fullPath = path.join(dir, f.name);
++    if (f.isDirectory()) {
++      walkDir(fullPath, callback);
++    } else {
++      callback(fullPath);
++    }
++  }
++}
++
++function touchManifestPlugin() {
++  return {
++    name: "touch-manifest",
++    setup(build) {
++      build.onEnd((result) => {
++        if (result.errors.length > 0) return;
++
++        const filesToTouch = [
++          path.resolve(__dirname, "../app/assets/config/manifest.js"),
++          ...(result.outputFiles || []).map((f) => f.path),
++        ];
++
++        for (const file of filesToTouch) {
++          if (fs.existsSync(file)) {
++            const now = new Date();
++            fs.utimesSync(file, now, now);
++          }
++        }
++      });
++    },
++  };
++}
+diff --git a/app/javascript/controllers/dynamic_import_map_controller.js b/app/javascript/controllers/dynamic_import_map_controller.js
+new file mode 100644
+index 0000000..53e206a
+--- /dev/null
++++ b/app/javascript/controllers/dynamic_import_map_controller.js
+@@ -0,0 +1,68 @@
++import { Controller } from "@hotwired/stimulus";
++
++export default class extends Controller {
++  static values = {
++    imports: Object,
++    integrity: Object,
++    scope: String,
++  };
++
++  connect() {
++    this.injectImportMap();
++  }
++
++  injectImportMap() {
++    const existingMap = document.querySelector(
++      `script[type="importmap"][data-dynamic="true"]`
++    );
++    if (existingMap) return;
++
++    const map = { imports: this.importsValue };
++    if (this.hasIntegrityValue) {
++      map.integrity = this.integrityValue;
++    }
++    if (this.hasScopeValue) {
++      map.scopes = JSON.parse(this.scopeValue);
++    }
++
++    const script = document.createElement("script");
++    script.type = "importmap";
++    script.dataset.dynamic = "true";
++    script.textContent = JSON.stringify(map);
++    document.head.appendChild(script);
++  }
++
++  static injectModule(name, url, integrity = null) {
++    const existingMap = document.querySelector(
++      `script[type="importmap"][data-dynamic="true"]`
++    );
++
++    if (existingMap) {
++      const map = JSON.parse(existingMap.textContent);
++      map.imports = map.imports || {};
++      map.imports[name] = url;
++
++      if (integrity) {
++        map.integrity = map.integrity || {};
++        map.integrity[url] = integrity;
++      }
++
++      existingMap.textContent = JSON.stringify(map);
++    } else {
++      const script = document.createElement("script");
++      script.type = "importmap";
++      script.dataset.dynamic = "true";
++
++      const map = { imports: { [name]: url } };
++      if (integrity) {
++        map.integrity = { [url]: integrity };
++      }
++
++      script.textContent = JSON.stringify(map);
++      document.head.appendChild(script);
++    }
++  }
++}
+diff --git a/app/javascript/lib/lazy_import.ts b/app/javascript/lib/lazy_import.ts
+new file mode 100644
+index 0000000..216e5a5
+--- /dev/null
++++ b/app/javascript/lib/lazy_import.ts
+@@ -0,0 +1,65 @@
++import DynamicImportMapController from "../controllers/dynamic_import_map_controller";
++
++interface LazyImportOptions {
++  name: string;
++  url: string;
++  integrity?: string;
++  fallback?: string;
++  timeout?: number;
++}
++
++export async function lazyImport(options: LazyImportOptions): Promise<any> {
++  const { name, url, integrity, timeout = 10000 } = options;
++
++  DynamicImportMapController.injectModule(name, url, integrity);
++
++  await waitForImportMapReady(name);
++
++  const controller = new AbortController();
++  const timer = setTimeout(() => controller.abort(), timeout);
++
++  try {
++    const module = await import(name);
++    clearTimeout(timer);
++    return module;
++  } catch (error) {
++    clearTimeout(timer);
++    if (options.fallback) {
++      console.warn(`[lazyImport] Failed to load "${name}", using fallback`);
++      return { default: () => options.fallback };
++    }
++    throw error;
++  }
++}
++
++function waitForImportMapReady(name: string, maxRetries = 50): Promise<void> {
++  return new Promise((resolve) => {
++    let attempts = 0;
++    const check = () => {
++      attempts++;
++      const importMap = document.querySelectorAll<HTMLScriptElement>(
++        'script[type="importmap"]'
++      );
++      if (importMap.length > 0) {
++        queueMicrotask(() => resolve());
++        return;
++      }
++      if (attempts >= maxRetries) {
++        resolve();
++        return;
++      }
++      setTimeout(check, 50);
++    };
++    check();
++  });
++}
+diff --git a/app/javascript/lib/sri_validator.ts b/app/javascript/lib/sri_validator.ts
+new file mode 100644
+index 0000000..d3e8c2a
+--- /dev/null
++++ b/app/javascript/lib/sri_validator.ts
+@@ -0,0 +1,73 @@
++import DynamicImportMapController from "../controllers/dynamic_import_map_controller";
++
++interface SRIEntry {
++  url: string;
++  hash: string;
++}
++
++export async function validateAndImport(
++  url: string,
++  expectedIntegrity: string,
++  moduleName: string
++): Promise<void> {
++  const response = await fetch(url);
++
++  if (!response.ok) {
++    throw new Error(`[SRI] Failed to fetch ${url}: ${response.status}`);
++  }
++
++  const blob = await response.blob();
++  const actualHash = await computeSRIHash(blob, expectedIntegrity);
++
++  if (!compareHashes(actualHash, expectedIntegrity)) {
++    throw new Error(
++      `[SRI] Integrity mismatch for ${moduleName}: expected ${expectedIntegrity}, got ${actualHash}`
++    );
++  }
++
++  const blobUrl = URL.createObjectURL(blob);
++  DynamicImportMapController.injectModule(moduleName, blobUrl);
++}
++
++async function computeSRIHash(
++  blob: Blob,
++  expectedIntegrity: string
++): Promise<string> {
++  let algorithm: AlgorithmIdentifier;
++  if (expectedIntegrity.startsWith("sha384")) {
++    algorithm = "SHA-384";
++  } else if (expectedIntegrity.startsWith("sha256")) {
++    algorithm = "SHA-256";
++  } else {
++    algorithm = "SHA-512";
++  }
++
++  const buffer = await blob.arrayBuffer();
++  const hashBuffer = await crypto.subtle.digest(algorithm, buffer);
++  const hashArray = Array.from(new Uint8Array(hashBuffer));
++  const hashBase64 = btoa(String.fromCharCode(...hashArray));
++
++  const prefix = algorithm.toLowerCase().replace("-", "");
++  return `${prefix}-${hashBase64}`;
++}
++
++function compareHashes(actual: string, expected: string): boolean {
++  const normalize = (h: string) => h.replace(/^sha(256|384|512)-/i, "sha$1-");
++  return normalize(actual) === normalize(expected);
++}
+diff --git a/app/javascript/lib/hmr.ts b/app/javascript/lib/hmr.ts
+new file mode 100644
+index 0000000..c7e7b2d
+--- /dev/null
++++ b/app/javascript/lib/hmr.ts
+@@ -0,0 +1,60 @@
++interface HMRModule {
++  hot?: {
++    accept(callback?: () => void): void;
++    dispose(callback: () => void): void;
++  };
++}
++
++declare const module: HMRModule;
++
++export function setupHMR() {
++  if (process.env.NODE_ENV !== "development") return;
++
++  if (typeof WebSocket === "undefined") {
++    startPollingReload();
++    return;
++  }
++
++  const ws = new WebSocket(`ws://${location.host}/hmr`);
++
++  ws.addEventListener("message", async (event) => {
++    const data = JSON.parse(event.data);
++
++    if (data.type === "update" && data.modules) {
++      for (const mod of data.modules) {
++        try {
++          const url = `${mod}?t=${Date.now()}`;
++          await import(url);
++          console.log(`[HMR] Updated: ${mod}`);
++        } catch (err) {
++          console.error(`[HMR] Failed to update ${mod}:`, err);
++          location.reload();
++        }
++      }
++    } else if (data.type === "reload") {
++      location.reload();
++    }
++  });
++
++  ws.addEventListener("close", () => {
++    startPollingReload();
++  });
++}
++
++function startPollingReload() {
++  let lastDigest = "";
++  setInterval(async () => {
++    try {
++      const response = await fetch("/importmap-digest.json");
++      const { digest } = await response.json();
++      if (lastDigest && lastDigest !== digest) {
++        location.reload();
++      }
++      lastDigest = digest;
++    } catch {}
++  }, 1000);
++}
+diff --git a/app/javascript/components/AsyncComponent.tsx b/app/javascript/components/AsyncComponent.tsx
+new file mode 100644
+index 0000000..f956f0e
+--- /dev/null
++++ b/app/javascript/components/AsyncComponent.tsx
+@@ -0,0 +1,48 @@
++import React, { Suspense, lazy, ComponentType } from "react";
++import { lazyImport } from "../lib/lazy_import";
++
++interface AsyncComponentProps {
++  moduleName: string;
++  moduleUrl: string;
++  integrity?: string;
++  exportName?: string;
++  loading?: React.ReactNode;
++  errorFallback?: React.ReactNode;
++}
++
++export function createAsyncComponent(options: {
++  moduleName: string;
++  moduleUrl: string;
++  integrity?: string;
++  exportName?: string;
++}): ComponentType<any> {
++  const LazyComponent = lazy(() =>
++    lazyImport({
++      name: options.moduleName,
++      url: options.moduleUrl,
++      integrity: options.integrity,
++    }).then((mod) => ({
++      default: options.exportName ? mod[options.exportName] : mod.default || mod,
++    }))
++  );
++
++  return function AsyncComponent(props: any) {
++    return (
++      <Suspense fallback={<div>Loading...</div>}>
++        <LazyComponent {...props} />
++      </Suspense>
++    );
++  };
++}
+diff --git a/app/helpers/dynamic_importmap_helper.rb b/app/helpers/dynamic_importmap_helper.rb
+new file mode 100644
+index 0000000..f20f47c
+--- /dev/null
++++ b/app/helpers/dynamic_importmap_helper.rb
+@@ -0,0 +1,30 @@
++module DynamicImportmapHelper
++  def dynamic_import_map_tag(modules)
++    imports = modules.each_with_object({}) do |(name, opts), hash|
++      hash[name] = opts[:url]
++    end
++
++    integrity = modules.each_with_object({}) do |(name, opts), hash|
++      hash[opts[:url]] = opts[:integrity] if opts[:integrity]
++    end
++
++    tag.div(
++      data: {
++        controller: "dynamic-import-map",
++        dynamic_import_map_imports_value: imports.to_json,
++        dynamic_import_map_integrity_value: integrity.presence&.to_json
++      }
++    )
++  end
++end
